@@ -1,0 +1,8 @@
+{
+  "firestore": [
+    {
+      "database": "ai-studio-android-perimetr-5719d203-5984-4776-b752-c0f4e217560a",
+      "rules": "firestore.rules"
+    }
+  ]
+}

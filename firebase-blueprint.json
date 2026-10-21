@@ -1,0 +1,49 @@
+{
+  "entities": {
+    "Sitio": {
+      "path": "/sitios/{siteId}",
+      "description": "Estado y reglas del perímetro de la bodega",
+      "fields": {
+        "estado": { "type": "string", "description": "desarmada, armada o alarma" },
+        "horario": { "type": "map", "description": "inicio (08:00), fin (19:00), dias" },
+        "armadoAutomatico": { "type": "boolean", "description": "Armado automático fuera de horario" },
+        "pinHash": { "type": "string", "description": "Hash SHA-256 con sal del PIN de 4 dígitos" },
+        "pinSalt": { "type": "string", "description": "Sal criptográfica aleatoria para el PIN" },
+        "sirenaActiva": { "type": "boolean", "description": "Estado de la sirena acústica" },
+        "estroboActivo": { "type": "boolean", "description": "Estado de la baliza estroboscópica" },
+        "ultimaActualizacion": { "type": "timestamp", "description": "Timestamp de última modificación" }
+      }
+    },
+    "Evento": {
+      "path": "/sitios/{siteId}/eventos/{id}",
+      "description": "Registro de eventos de seguridad y sensores",
+      "fields": {
+        "tipo": { "type": "string", "description": "pir, reed, armado, desarmado, alarma, login" },
+        "detalle": { "type": "string", "description": "Descripción del suceso" },
+        "origen": { "type": "string", "description": "nodo o panel" },
+        "timestamp": { "type": "timestamp", "description": "Momento exacto del evento" }
+      }
+    },
+    "ConfiguracionSitio": {
+      "path": "/sitios/{siteId}/config",
+      "description": "Configuración del sensor PIR / Cámara y calibración",
+      "fields": {
+        "modoPir": { "type": "string", "description": "camara o simulado" },
+        "sensibilidad": { "type": "number", "description": "Sensibilidad de 1 a 10" },
+        "tiempoConfirmacion": { "type": "number", "description": "Segundos de confirmación continua" },
+        "estadoCamara": { "type": "string", "description": "activa, inactiva, error o sin_permiso" },
+        "ultimoMovimiento": { "type": "timestamp", "description": "Última detección confirmada" }
+      }
+    },
+    "SensoresEstado": {
+      "path": "/sitios/{siteId}/sensores",
+      "description": "Telemetría en tiempo real de los sensores perimetrales",
+      "fields": {
+        "pirMovimiento": { "type": "boolean", "description": "Detección de presencia PIR" },
+        "reedPuertaAbierta": { "type": "boolean", "description": "Estado del contacto magnético de puerta" },
+        "ultimoPir": { "type": "timestamp", "description": "Último cambio PIR" },
+        "ultimoReed": { "type": "timestamp", "description": "Último cambio Reed Switch" }
+      }
+    }
+  }
+}

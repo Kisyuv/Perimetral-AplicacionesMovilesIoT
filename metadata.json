@@ -1,0 +1,6 @@
+{
+  "name": "Perimetral",
+  "description": "Sistema de alarma perimetral simulado para una bodega que detecta intrusos fuera de horario.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
