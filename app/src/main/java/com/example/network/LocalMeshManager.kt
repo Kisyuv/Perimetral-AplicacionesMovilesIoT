@@ -27,11 +27,13 @@ import java.util.concurrent.TimeUnit
 
 enum class ConnectionType(val label: String) {
     LOCAL_WIFI("Red local (WiFi Bodega)"),
+    BLUETOOTH("Enlace Bluetooth P2P"),
     CLOUD_BACKUP("Nube (Firebase Backup)")
 }
 
 class LocalMeshManager(
-    private val keystoreManager: KeystoreManager
+    private val keystoreManager: KeystoreManager,
+    var bluetoothSyncManager: BluetoothSyncManager? = null
 ) {
 
     private val scope = CoroutineScope(Dispatchers.IO)
@@ -51,6 +53,14 @@ class LocalMeshManager(
     val lastReceivedLocalCommand: StateFlow<String?> = _lastReceivedLocalCommand.asStateFlow()
 
     var onLocalCommandReceived: ((action: String, pin: String?, detail: String?) -> Unit)? = null
+
+    init {
+        // Enlazar eventos recibidos por Bluetooth si no hay WiFi
+        bluetoothSyncManager?.onCommandReceived = { action, pin, detail ->
+            _lastReceivedLocalCommand.value = "$action [AES-GCM BT OK]"
+            onLocalCommandReceived?.invoke(action, pin, detail)
+        }
+    }
 
     // 1. SERVIDOR WEBSOCKET LOCAL (Se ejecuta en el NODO)
     fun startLocalServer(port: Int = 8765) {
@@ -229,22 +239,40 @@ class LocalMeshManager(
     }
 
     fun sendLocalCommand(action: String, pin: String? = null, detail: String? = null): Boolean {
-        val ws = clientWebSocket ?: return false
-        return try {
-            val json = JSONObject().apply {
-                put("action", action)
-                if (pin != null) put("pin", pin)
-                if (detail != null) put("detail", detail)
-                put("timestamp", System.currentTimeMillis())
-            }
+        // 1. Intentar por WebSocket si está conectado
+        val ws = clientWebSocket
+        if (ws != null) {
+            try {
+                val json = JSONObject().apply {
+                    put("action", action)
+                    if (pin != null) put("pin", pin)
+                    if (detail != null) put("detail", detail)
+                    put("timestamp", System.currentTimeMillis())
+                }
 
-            // Cifrar con AES-GCM
-            val encrypted = keystoreManager.encrypt(json.toString())
-            ws.send(encrypted)
-        } catch (e: Exception) {
-            _connectionType.value = ConnectionType.CLOUD_BACKUP
-            false
+                // Cifrar con AES-GCM
+                val encrypted = keystoreManager.encrypt(json.toString())
+                val sent = ws.send(encrypted)
+                if (sent) return true
+            } catch (_: Exception) {}
         }
+
+        // 2. Si no hay WebSocket LAN, intentar por Bluetooth P2P
+        val btManager = bluetoothSyncManager
+        if (btManager != null && btManager.isConnected.value) {
+            val btSent = btManager.sendCommand(action, pin, detail)
+            if (btSent) {
+                _connectionType.value = ConnectionType.BLUETOOTH
+                return true
+            }
+        }
+
+        _connectionType.value = ConnectionType.CLOUD_BACKUP
+        return false
+    }
+
+    fun updateConnectionType(type: ConnectionType) {
+        _connectionType.value = type
     }
 
     fun disconnectClient() {
@@ -252,6 +280,10 @@ class LocalMeshManager(
             clientWebSocket?.close(1000, "Panel desconectado")
         } catch (_: Exception) {}
         clientWebSocket = null
-        _connectionType.value = ConnectionType.CLOUD_BACKUP
+        if (bluetoothSyncManager?.isConnected?.value == true) {
+            _connectionType.value = ConnectionType.BLUETOOTH
+        } else {
+            _connectionType.value = ConnectionType.CLOUD_BACKUP
+        }
     }
 }

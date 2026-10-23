@@ -82,7 +82,6 @@ fun PerimetralBottomBar(
                         Screen.SCHEDULE -> "Horarios"
                         Screen.NETWORK -> "Red WiFi"
                         Screen.SECURITY -> "Seguridad"
-                        Screen.PERMISSIONS -> "Permisos"
                         Screen.TESTS -> "Pruebas"
                     },
                     color = if (isSelected) TextSecondary else TextMuted,

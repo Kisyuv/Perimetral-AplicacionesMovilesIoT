@@ -13,6 +13,7 @@ class MotionDetectorAnalyzer(
 
     @Volatile var isEnabled: Boolean = true
     @Volatile var isAlarmActive: Boolean = false
+    @Volatile var isDeviceMoving: Boolean = false // Actualizado por acelerómetro
     @Volatile var sensitivity: Long = 5L // 1 a 10
     @Volatile var confirmationSeconds: Long = 2L // segundos requeridos
 
@@ -47,9 +48,17 @@ class MotionDetectorAnalyzer(
             return
         }
 
-        // 2. Calibración inicial (3 segundos al armar)
+        // 2. Si el dispositivo en sí se está moviendo físicamente (detectado por acelerómetro),
+        // descartar la detección para evitar falsos positivos al manipular o mover el móvil
+        if (isDeviceMoving) {
+            motionStartTimestamp = 0L
+            onMotionProgress(0f)
+            image.close()
+            return
+        }
+
+        // 3. Calibración inicial (3 segundos al armar)
         if (now < calibrationEndTime) {
-            // Almacenar fondo durante calibración
             storeBackground(image)
             image.close()
             onMotionProgress(0f)
@@ -66,9 +75,9 @@ class MotionDetectorAnalyzer(
 
             // Submuestreo eficiente (paso de 4 píxeles)
             val step = 4
-            val sampleCountX = width / step
-            val sampleCountY = height / step
-            val totalSamples = sampleCountX * sampleCountY
+            val sampleCols = width / step
+            val sampleRows = height / step
+            val totalSamples = sampleCols * sampleRows
             val currentSamples = ByteArray(totalSamples)
 
             var sampleIdx = 0
@@ -89,25 +98,63 @@ class MotionDetectorAnalyzer(
                 return
             }
 
-            // Calcular diferencia de fotogramas
-            var changedPixels = 0
-            val pixelDiffThreshold = 25 // Umbral de diferencia de luminosidad por píxel
+            // Análisis espacial en cuadrícula 4x4 (16 bloques)
+            // Esto permite diferenciar movimiento del teléfono (desplazamiento global uniforme)
+            // de un objeto o mano moviéndose frente a la cámara (variación localizada)
+            val gridCols = 4
+            val gridRows = 4
+            val blockWidth = sampleCols / gridCols
+            val blockHeight = sampleRows / gridRows
+            val pixelDiffThreshold = 25
 
-            for (i in 0 until totalSamples) {
-                val diff = abs((currentSamples[i].toInt() and 0xFF) - (prev[i].toInt() and 0xFF))
-                if (diff > pixelDiffThreshold) {
-                    changedPixels++
+            var totalChangedPixels = 0
+            val activeBlocks = BooleanArray(gridCols * gridRows)
+
+            for (gy in 0 until gridRows) {
+                for (gx in 0 until gridCols) {
+                    var blockChangedPixels = 0
+                    val blockTotalPixels = blockWidth * blockHeight
+
+                    for (by in 0 until blockHeight) {
+                        val sy = gy * blockHeight + by
+                        for (bx in 0 until blockWidth) {
+                            val sx = gx * blockWidth + bx
+                            val idx = sy * sampleCols + sx
+                            if (idx < totalSamples) {
+                                val diff = abs((currentSamples[idx].toInt() and 0xFF) - (prev[idx].toInt() and 0xFF))
+                                if (diff > pixelDiffThreshold) {
+                                    blockChangedPixels++
+                                    totalChangedPixels++
+                                }
+                            }
+                        }
+                    }
+
+                    // Si en este bloque más del 18% de píxeles cambiaron, marcar bloque activo
+                    if ((blockChangedPixels.toFloat() / blockTotalPixels.toFloat()) >= 0.18f) {
+                        activeBlocks[gy * gridCols + gx] = true
+                    }
                 }
             }
 
             previousFrameBuffer = currentSamples
 
-            val changePercentage = (changedPixels.toFloat() / totalSamples.toFloat()) * 100f
+            val activeBlocksCount = activeBlocks.count { it }
+            val changePercentage = (totalChangedPixels.toFloat() / totalSamples.toFloat()) * 100f
 
-            // Umbral según sensibilidad: 1 (poco sensible, necesita 15% cambio) a 10 (muy sensible, necesita 1.5% cambio)
+            // FILTRO DE INMUNIDAD A MOVIMIENTO DEL MÓVIL:
+            // - Si casi todos los bloques (>= 13 de 16) cambian a la vez, o el cambio global supera el 60%,
+            //   significa que se movió todo el teléfono (paneo de escena o cambio brusco de luz ambiental).
+            // - Un objeto real (mano, intruso) activa entre 2 y 10 bloques localizados.
+            val isGlobalShift = activeBlocksCount >= 13 || changePercentage > 60f
+
+            // Umbral de sensibilidad (1 a 10)
             val requiredThreshold = (11 - sensitivity.coerceIn(1, 10)) * 1.5f
+            val hasValidLocalizedMotion = !isGlobalShift &&
+                    activeBlocksCount in 2..10 &&
+                    changePercentage >= requiredThreshold
 
-            if (changePercentage >= requiredThreshold) {
+            if (hasValidLocalizedMotion) {
                 if (motionStartTimestamp == 0L) {
                     motionStartTimestamp = now
                 }
@@ -122,7 +169,7 @@ class MotionDetectorAnalyzer(
                     onMotionDetected()
                 }
             } else {
-                // Si decae el movimiento, resetear el tiempo de confirmación
+                // Si decae o es movimiento global del teléfono, resetear confirmación
                 motionStartTimestamp = 0L
                 onMotionProgress(0f)
             }

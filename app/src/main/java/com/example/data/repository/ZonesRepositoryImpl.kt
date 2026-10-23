@@ -19,7 +19,8 @@ class ZonesRepositoryImpl(
             sector = "Acceso Carga / Descarga",
             sensorType = "Contacto Magnético Heavy-Duty",
             isSecure = true,
-            isTampered = false
+            isTampered = false,
+            isActive = false
         ),
         PerimeterZone(
             id = "ZN-02",
@@ -27,7 +28,8 @@ class ZonesRepositoryImpl(
             sector = "Límite Exterior Norte",
             sensorType = "Haz Fotoeléctrico Doble",
             isSecure = true,
-            isTampered = false
+            isTampered = false,
+            isActive = false
         ),
         PerimeterZone(
             id = "ZN-03",
@@ -35,7 +37,8 @@ class ZonesRepositoryImpl(
             sector = "Perímetro Trasero Bodega",
             sensorType = "Sensor Infrarrojo Pasivo Exterior",
             isSecure = true,
-            isTampered = false
+            isTampered = false,
+            isActive = false
         ),
         PerimeterZone(
             id = "ZN-04",
@@ -43,7 +46,8 @@ class ZonesRepositoryImpl(
             sector = "Control de Guardia",
             sensorType = "Cerradura Electromagnética / Contacto",
             isSecure = true,
-            isTampered = false
+            isTampered = false,
+            isActive = false
         ),
         PerimeterZone(
             id = "ZN-05",
@@ -51,7 +55,8 @@ class ZonesRepositoryImpl(
             sector = "Nave Principal Almacén",
             sensorType = "Detector Volumétrico PIR 360°",
             isSecure = true,
-            isTampered = false
+            isTampered = false,
+            isActive = false
         ),
         PerimeterZone(
             id = "ZN-06",
@@ -59,7 +64,8 @@ class ZonesRepositoryImpl(
             sector = "Oficinas Perimetrales",
             sensorType = "Detector de Rotura de Cristal",
             isSecure = true,
-            isTampered = false
+            isTampered = false,
+            isActive = false
         )
     )
 
@@ -84,5 +90,23 @@ class ZonesRepositoryImpl(
                 timestamp = System.currentTimeMillis()
             )
         )
+    }
+
+    override suspend fun setZoneActive(zoneId: String, isActive: Boolean) {
+        val updated = _zonesFlow.value.map { zone ->
+            if (zone.id == zoneId) {
+                zone.copy(isActive = isActive, lastSignalTime = System.currentTimeMillis())
+            } else {
+                zone
+            }
+        }
+        _zonesFlow.value = updated
+    }
+
+    override suspend fun setAllZonesActive(isActive: Boolean) {
+        val updated = _zonesFlow.value.map { zone ->
+            zone.copy(isActive = isActive, lastSignalTime = System.currentTimeMillis())
+        }
+        _zonesFlow.value = updated
     }
 }

@@ -72,6 +72,8 @@ class MainActivity : ComponentActivity() {
             val zones by viewModel.zones.collectAsStateWithLifecycle()
             val connectionType by viewModel.connectionType.collectAsStateWithLifecycle()
             val discoveredNodes by viewModel.discoveredNodes.collectAsStateWithLifecycle()
+            val isBluetoothConnected by viewModel.isBluetoothConnected.collectAsStateWithLifecycle()
+            val connectedBluetoothDevice by viewModel.connectedBluetoothDevice.collectAsStateWithLifecycle()
 
             PerimetralTheme(systemState = currentState) {
                 // 1. Si no hay usuario autenticado, mostrar pantalla de autenticación
@@ -140,6 +142,9 @@ class MainActivity : ComponentActivity() {
                                             },
                                             onFallbackToSimulated = {
                                                 viewModel.fallbackToSimulatedPir()
+                                            },
+                                            onResetSensors = {
+                                                viewModel.resetSensors()
                                             }
                                         )
                                     } else {
@@ -156,12 +161,17 @@ class MainActivity : ComponentActivity() {
                                             onSimulateSensor = { tipo, detalle ->
                                                 viewModel.simulateSensorTrigger(tipo, detalle)
                                             },
-                                            onUpdateSchedule = { inicio, fin, autoArm ->
-                                                viewModel.updateSchedule(inicio, fin, autoArm)
-                                            },
                                             onUpdateCameraConfig = { modo, sens, tiempo ->
                                                 viewModel.updateCameraConfig(modo, sens, tiempo)
-                                            }
+                                            },
+                                            onResetSensors = {
+                                                viewModel.resetSensors()
+                                            },
+                                            zones = zones,
+                                            onActivateZone = { zoneId -> viewModel.activateZone(zoneId) },
+                                            onDeactivateZone = { zoneId -> viewModel.deactivateZone(zoneId) },
+                                            onActivateAllZones = { viewModel.activateAllZones() },
+                                            onDeactivateAllZones = { viewModel.deactivateAllZones() }
                                         )
                                     }
                                 }
@@ -171,7 +181,12 @@ class MainActivity : ComponentActivity() {
                                 Screen.EVENTS -> EventsScreen(
                                     events = securityEvents
                                 )
-                                Screen.SCHEDULE -> ScheduleScreen()
+                                Screen.SCHEDULE -> ScheduleScreen(
+                                    siteState = siteState,
+                                    onUpdateSchedule = { inicio, fin, autoArm ->
+                                        viewModel.updateSchedule(inicio, fin, autoArm)
+                                    }
+                                )
                                 Screen.NETWORK -> NetworkScreen(
                                     deviceRole = deviceRole,
                                     connectionType = connectionType,
@@ -181,6 +196,26 @@ class MainActivity : ComponentActivity() {
                                     },
                                     onRefreshDiscovery = {
                                         viewModel.refreshDiscovery()
+                                    },
+                                    isBluetoothConnected = isBluetoothConnected,
+                                    connectedBluetoothDevice = connectedBluetoothDevice,
+                                    pairedBluetoothDevices = viewModel.bluetoothSyncManager.getPairedDevices(),
+                                    onConnectBluetooth = { address ->
+                                        viewModel.connectBluetoothNode(address) { success ->
+                                            if (success) {
+                                                viewModel.localMeshManager.updateConnectionType(com.example.network.ConnectionType.BLUETOOTH)
+                                            }
+                                        }
+                                    },
+                                    onDisconnectBluetooth = {
+                                        viewModel.disconnectBluetoothNode()
+                                    },
+                                    onActivateBluetooth = {
+                                        viewModel.bluetoothSyncManager.activateBluetooth { success ->
+                                            if (success) {
+                                                viewModel.localMeshManager.updateConnectionType(com.example.network.ConnectionType.BLUETOOTH)
+                                            }
+                                        }
                                     }
                                 )
                                 Screen.SECURITY -> SecurityScreen(
@@ -195,7 +230,10 @@ class MainActivity : ComponentActivity() {
                                 Screen.PERMISSIONS -> PermissionsScreen()
                                 Screen.TESTS -> TestDiagnosticsScreen(
                                     siteAlarmRepository = viewModel.siteAlarmRepository,
-                                    keystoreManager = viewModel.keystoreManager
+                                    keystoreManager = viewModel.keystoreManager,
+                                    actuatorManager = viewModel.actuatorManager,
+                                    authRepository = viewModel.authRepository,
+                                    deviceRole = deviceRole ?: "panel"
                                 )
                             }
                         }

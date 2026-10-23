@@ -9,7 +9,12 @@ import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
 import android.util.Size
+import kotlin.math.sqrt
 import android.view.WindowManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -18,7 +23,9 @@ import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -39,9 +46,13 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.BatteryAlert
+import androidx.compose.material.icons.outlined.CameraRear
 import androidx.compose.material.icons.outlined.Campaign
+import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.DoorSliding
 import androidx.compose.material.icons.outlined.FlashOn
+import androidx.compose.material.icons.outlined.FlashlightOff
+import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Sensors
 import androidx.compose.material.icons.outlined.Videocam
 import androidx.compose.material.icons.outlined.VideocamOff
@@ -101,6 +112,7 @@ fun NodeHubScreen(
     onMotionDetected: () -> Unit,
     onCameraStatusChange: (status: String) -> Unit,
     onFallbackToSimulated: () -> Unit,
+    onResetSensors: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -108,12 +120,14 @@ fun NodeHubScreen(
     val accent = LocalAlarmAccentColor.current
     val scrollState = rememberScrollState()
 
-    // Mantener la pantalla encendida (FLAG_KEEP_SCREEN_ON) en el nodo central
+    // Mantener la pantalla encendida en el dispositivo que actúa como nodo central
     val activity = context as? Activity
     DisposableEffect(Unit) {
         activity?.window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         onDispose {
             activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            actuatorManager.setCameraControl(null)
+            actuatorManager.stopTorchStrobe()
         }
     }
 
@@ -123,24 +137,24 @@ fun NodeHubScreen(
     var useTorchStrobe by remember { mutableStateOf(true) }
     var motionProgress by remember { mutableFloatStateOf(0f) }
 
-    // Estado del parpadeo estroboscópico de pantalla (3 Hz)
+    // Control preciso de estroboscopio: sólo se activa si estroboActivo está encendido
     var strobeFlashState by remember { mutableStateOf(false) }
-    val isAlarmActive = siteState.estado == "alarma" || siteState.estroboActivo
+    val isStrobeActive = siteState.estroboActivo
 
-    LaunchedEffect(isAlarmActive) {
-        if (isAlarmActive) {
+    LaunchedEffect(isStrobeActive, useTorchStrobe) {
+        if (isStrobeActive) {
             actuatorManager.startTorchStrobe(useTorchStrobe)
             while (true) {
                 strobeFlashState = !strobeFlashState
-                delay(166L) // 3 Hz máx por seguridad fotosensible
+                delay(166L) // Máx 3 Hz por fotosensibilidad
             }
         } else {
-            actuatorManager.stopAll()
+            actuatorManager.stopTorchStrobe()
             strobeFlashState = false
         }
     }
 
-    // Comprobación de optimización de batería al inicio
+    // Comprobación de optimización de batería
     LaunchedEffect(Unit) {
         val powerManager = context.getSystemService(Context.POWER_SERVICE) as? PowerManager
         if (powerManager != null && !powerManager.isIgnoringBatteryOptimizations(context.packageName)) {
@@ -148,16 +162,52 @@ fun NodeHubScreen(
         }
     }
 
-    // Instancia del analizador de movimiento CameraX
+    // Instancia del analizador de movimiento CameraX (utilizando cámara trasera)
     val analyzer = remember {
         MotionDetectorAnalyzer(
             onMotionDetected = onMotionDetected,
             onMotionProgress = { motionProgress = it },
-            onError = { error ->
+            onError = { _ ->
                 onCameraStatusChange("error")
                 onFallbackToSimulated()
             }
         )
+    }
+
+    // Listener de acelerómetro: suprime la detección de movimiento si el propio teléfono está siendo manipulado o movido
+    DisposableEffect(context) {
+        val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as? SensorManager
+        val accelerometer = sensorManager?.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
+        val listener = object : SensorEventListener {
+            var lastMovementTime = 0L
+
+            override fun onSensorChanged(event: SensorEvent?) {
+                if (event == null) return
+                val x = event.values[0]
+                val y = event.values[1]
+                val z = event.values[2]
+                val gMagnitude = sqrt(x * x + y * y + z * z)
+                val deltaG = kotlin.math.abs(gMagnitude - SensorManager.GRAVITY_EARTH)
+
+                val now = System.currentTimeMillis()
+                if (deltaG > 1.25f) {
+                    lastMovementTime = now
+                    analyzer.isDeviceMoving = true
+                } else if (now - lastMovementTime > 1200L) {
+                    analyzer.isDeviceMoving = false
+                }
+            }
+
+            override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+        }
+
+        if (sensorManager != null && accelerometer != null) {
+            sensorManager.registerListener(listener, accelerometer, SensorManager.SENSOR_DELAY_UI)
+        }
+
+        onDispose {
+            sensorManager?.unregisterListener(listener)
+        }
     }
 
     // Sincronizar parámetros del analizador con Firestore
@@ -200,7 +250,58 @@ fun NodeHubScreen(
         }
     }
 
-    // Diálogo Explicación de Optimización de Batería
+    // Diálogo Rationale de Privacidad para Cámara Trasera
+    if (showCameraRationaleDialog) {
+        AlertDialog(
+            onDismissRequest = {
+                showCameraRationaleDialog = false
+                onFallbackToSimulated()
+            },
+            containerColor = DarkSurface,
+            titleContentColor = TextPrimary,
+            textContentColor = TextSecondary,
+            icon = { Icon(Icons.Outlined.CameraRear, contentDescription = null, tint = accent, modifier = Modifier.size(32.dp)) },
+            title = { Text("Sensor de Movimiento por Cámara Trasera", fontSize = 17.sp, fontWeight = FontWeight.Bold) },
+            text = {
+                Text(
+                    text = "Perimetral utiliza la cámara trasera apuntando al pasillo de la bodega para analizar variaciones de luminosidad en tiempo real y detectar intrusos.\n\nPrivacidad absoluta: los fotogramas se procesan únicamente en la memoria volátil del procesador, nunca se graban, no se almacenan y nunca se transmiten a internet.",
+                    fontSize = 13.sp,
+                    lineHeight = 19.sp,
+                    color = TextSecondary
+                )
+            },
+            confirmButton = {
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(accent)
+                        .clickable {
+                            showCameraRationaleDialog = false
+                            cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                        }
+                        .padding(horizontal = 16.dp, vertical = 10.dp)
+                ) {
+                    Text("Activar Cámara Trasera", color = DarkBackground, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(DarkSurfaceVariant)
+                        .clickable {
+                            showCameraRationaleDialog = false
+                            onFallbackToSimulated()
+                        }
+                        .padding(horizontal = 14.dp, vertical = 10.dp)
+                ) {
+                    Text("Usar Simulado", color = TextSecondary, fontSize = 12.sp)
+                }
+            }
+        )
+    }
+
+    // Diálogo de Optimización de Batería
     if (showBatteryOptimizationDialog) {
         AlertDialog(
             onDismissRequest = { showBatteryOptimizationDialog = false },
@@ -211,15 +312,16 @@ fun NodeHubScreen(
             title = { Text("Exclusión de Ahorro de Batería", fontSize = 17.sp, fontWeight = FontWeight.Bold) },
             text = {
                 Text(
-                    text = "Para que la central de alarma de la bodega y los sensores continúen vigilando y detectando intrusos ininterrumpidamente con la pantalla apagada o en reposo, es necesario autorizar la exclusión de optimización de batería para Perimetral.",
-                    fontSize = 12.sp,
-                    lineHeight = 18.sp
+                    text = "Para que la central de alarma de la bodega continúe vigilando ininterrumpidamente con la pantalla apagada o en reposo, es necesario autorizar la exclusión de optimización de batería.",
+                    fontSize = 13.sp,
+                    lineHeight = 18.sp,
+                    color = TextSecondary
                 )
             },
             confirmButton = {
                 Box(
                     modifier = Modifier
-                        .clip(RoundedCornerShape(4.dp))
+                        .clip(RoundedCornerShape(8.dp))
                         .background(accent)
                         .clickable {
                             showBatteryOptimizationDialog = false
@@ -230,18 +332,18 @@ fun NodeHubScreen(
                                 context.startActivity(intent)
                             } catch (_: Exception) {}
                         }
-                        .padding(horizontal = 14.dp, vertical = 8.dp)
+                        .padding(horizontal = 16.dp, vertical = 10.dp)
                 ) {
-                    Text("Configurar Batería", color = DarkBackground, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    Text("Autorizar", color = DarkBackground, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                 }
             },
             dismissButton = {
                 Box(
                     modifier = Modifier
-                        .clip(RoundedCornerShape(4.dp))
+                        .clip(RoundedCornerShape(8.dp))
                         .background(DarkSurfaceVariant)
                         .clickable { showBatteryOptimizationDialog = false }
-                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                        .padding(horizontal = 14.dp, vertical = 10.dp)
                 ) {
                     Text("Más tarde", color = TextSecondary, fontSize = 12.sp)
                 }
@@ -249,58 +351,8 @@ fun NodeHubScreen(
         )
     }
 
-    // Diálogo Rationale de Privacidad para Cámara Frontal
-    if (showCameraRationaleDialog) {
-        AlertDialog(
-            onDismissRequest = {
-                showCameraRationaleDialog = false
-                onFallbackToSimulated()
-            },
-            containerColor = DarkSurface,
-            titleContentColor = TextPrimary,
-            textContentColor = TextSecondary,
-            icon = { Icon(Icons.Outlined.Videocam, contentDescription = null, tint = accent, modifier = Modifier.size(32.dp)) },
-            title = { Text("Sensor de Movimiento por Cámara", fontSize = 17.sp, fontWeight = FontWeight.Bold) },
-            text = {
-                Text(
-                    text = "Perimetral utiliza la cámara frontal exclusivamente para analizar diferencias de luminosidad en tiempo real y detectar intrusiones en la bodega.\n\nPrivacidad absoluta: los fotogramas se procesan únicamente en la memoria volátil del procesador, nunca se graban, no se almacenan y nunca se transmiten a internet.",
-                    fontSize = 12.sp,
-                    lineHeight = 18.sp
-                )
-            },
-            confirmButton = {
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(accent)
-                        .clickable {
-                            showCameraRationaleDialog = false
-                            cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
-                        }
-                        .padding(horizontal = 14.dp, vertical = 8.dp)
-                ) {
-                    Text("Permitir Cámara", color = DarkBackground, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                }
-            },
-            dismissButton = {
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(4.dp))
-                        .background(DarkSurfaceVariant)
-                        .clickable {
-                            showCameraRationaleDialog = false
-                            onFallbackToSimulated()
-                        }
-                        .padding(horizontal = 12.dp, vertical = 8.dp)
-                ) {
-                    Text("Usar Simulado", color = TextSecondary, fontSize = 12.sp)
-                }
-            }
-        )
-    }
-
-    // Fondo reactivo con efecto estroboscópico de seguridad (3 Hz máximo)
-    val backgroundFlashColor = if (isAlarmActive && strobeFlashState) Color.White else DarkBackground
+    // Fondo reactivo con efecto estroboscópico suave durante alerta
+    val backgroundFlashColor = if (isStrobeActive && strobeFlashState) Color.White else DarkBackground
 
     Column(
         modifier = modifier
@@ -309,128 +361,192 @@ fun NodeHubScreen(
             .padding(horizontal = 20.dp)
             .verticalScroll(scrollState)
             .testTag("node_hub_screen"),
-        verticalArrangement = Arrangement.spacedBy(18.dp)
+        verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        Spacer(modifier = Modifier.height(10.dp))
+        Spacer(modifier = Modifier.height(6.dp))
 
-        // Encabezado del Nodo
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+        // 1. Tarjeta de Encabezado e Identidad del Nodo (Amigable y Clara)
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(14.dp))
+                .background(DarkSurface)
+                .border(1.dp, if (isStrobeActive) AccentAlarm else DarkBorder, RoundedCornerShape(14.dp))
+                .padding(18.dp)
         ) {
-            Column {
-                Text(
-                    text = "NODO CENTRAL BODEGA",
-                    color = if (isAlarmActive && strobeFlashState) Color.Black else TextPrimary,
-                    fontSize = 20.sp,
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 1.sp
-                )
-                Text(
-                    text = "Hardware: $deviceModel · Pantalla fija activa",
-                    color = if (isAlarmActive && strobeFlashState) Color.Black else TextMuted,
-                    fontSize = 11.sp
-                )
-            }
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            modifier = Modifier
+                                .size(10.dp)
+                                .clip(CircleShape)
+                                .background(accent)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "CENTRAL DE BODEGA",
+                            color = TextPrimary,
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 1.sp
+                        )
+                    }
 
-            Box(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(4.dp))
-                    .background(DarkSurfaceVariant)
-                    .padding(horizontal = 8.dp, vertical = 4.dp)
-            ) {
+                    Box(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(accent.copy(alpha = 0.15f))
+                            .border(1.dp, accent.copy(alpha = 0.5f), RoundedCornerShape(6.dp))
+                            .padding(horizontal = 10.dp, vertical = 4.dp)
+                    ) {
+                        Text(
+                            text = siteState.estado.uppercase(),
+                            color = accent,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                }
+
                 Text(
-                    text = siteState.estado.uppercase(),
-                    color = accent,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold
+                    text = "Dispositivo: $deviceModel · Pantalla en modo continuo · Sincronizado en tiempo real",
+                    color = TextSecondary,
+                    fontSize = 12.sp
                 )
             }
         }
 
-        // Indicadores en Tiempo Real de Sensores (PIR y Reed Switch)
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            SensorLiveStatusCard(
-                name = "Sensor PIR",
-                subtext = if (cameraConfig.modoPir == "camara") "Cámara frontal activa" else "Modo simulado",
-                isActive = sensorState.pirMovimiento,
-                activeText = "MOVIMIENTO DETECTADO",
-                idleText = "Sin movimiento",
-                icon = Icons.Outlined.Sensors,
-                activeColor = AccentAlarm,
-                modifier = Modifier.weight(1f)
-            )
+        // 2. Indicadores Amigables de Sensores en Vivo (PIR y Reed)
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "ESTADO DE SENSORES EN TIEMPO REAL",
+                    color = TextMuted,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    letterSpacing = 0.8.sp
+                )
 
-            SensorLiveStatusCard(
-                name = "Reed Switch",
-                subtext = "Contacto magnético portón",
-                isActive = sensorState.reedPuertaAbierta,
-                activeText = "PUERTA ABIERTA",
-                idleText = "Puerta cerrada",
-                icon = Icons.Outlined.DoorSliding,
-                activeColor = AccentAlarm,
-                modifier = Modifier.weight(1f)
-            )
+                // Botón amigable para restablecer sensores
+                Row(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(DarkSurfaceVariant)
+                        .clickable { onResetSensors() }
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(Icons.Outlined.Refresh, contentDescription = null, tint = TextSecondary, modifier = Modifier.size(12.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(text = "Restablecer", color = TextSecondary, fontSize = 11.sp)
+                }
+            }
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                SensorLiveStatusCard(
+                    name = "Sensor PIR (Movimiento)",
+                    subtext = if (cameraConfig.modoPir == "camara") "Cámara trasera activa" else "Modo simulado",
+                    isActive = sensorState.pirMovimiento,
+                    activeText = "¡MOVIMIENTO DETECTADO!",
+                    idleText = "Normal · Sin movimiento",
+                    icon = Icons.Outlined.Sensors,
+                    modifier = Modifier.weight(1f)
+                )
+
+                SensorLiveStatusCard(
+                    name = "Reed Switch (Portón)",
+                    subtext = "Contacto magnético cortina",
+                    isActive = sensorState.reedPuertaAbierta,
+                    activeText = "¡PUERTA ABIERTA!",
+                    idleText = "Normal · Puerta cerrada",
+                    icon = Icons.Outlined.DoorSliding,
+                    modifier = Modifier.weight(1f)
+                )
+            }
         }
 
         // Progreso de confirmación de movimiento si está activa la cámara
         if (cameraConfig.modoPir == "camara" && motionProgress > 0f) {
-            Column(
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(6.dp))
+                    .clip(RoundedCornerShape(10.dp))
                     .background(DarkSurface)
-                    .padding(12.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
+                    .border(1.dp, AccentAlarm.copy(alpha = 0.5f), RoundedCornerShape(10.dp))
+                    .padding(14.dp)
             ) {
-                Text(text = "Confirmando movimiento continuo...", color = AccentAlarm, fontSize = 11.sp)
-                LinearProgressIndicator(
-                    progress = { motionProgress },
-                    modifier = Modifier.fillMaxWidth().height(4.dp),
-                    color = AccentAlarm,
-                    trackColor = DarkSurfaceVariant
-                )
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text(text = "Verificando persistencia de movimiento...", color = AccentAlarm, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        Text(text = "${(motionProgress * 100).toInt()}%", color = AccentAlarm, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
+                    LinearProgressIndicator(
+                        progress = { motionProgress },
+                        modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp)),
+                        color = AccentAlarm,
+                        trackColor = DarkSurfaceVariant
+                    )
+                }
             }
         }
 
-        // Módulo CameraX (ImageAnalysis de fondo + Vista previa opcional)
+        // 3. Módulo CameraX con Cámara Trasera
         if (cameraConfig.modoPir == "camara" && ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(8.dp))
+                    .clip(RoundedCornerShape(14.dp))
                     .background(DarkSurface)
-                    .border(1.dp, DarkBorder, RoundedCornerShape(8.dp))
+                    .border(1.dp, DarkBorder, RoundedCornerShape(14.dp))
                     .padding(16.dp)
             ) {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Outlined.Videocam, contentDescription = null, tint = accent, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(text = "ANÁLISIS CAMERAX ACTIVO", color = accent, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            Icon(Icons.Outlined.CameraRear, contentDescription = null, tint = accent, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column {
+                                Text(text = "CÁMARA TRASERA (DETECTOR PIR)", color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                                Text(text = "320x240 · Detección de intrusos", color = TextMuted, fontSize = 11.sp)
+                            }
                         }
 
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(text = "Vista previa", color = TextSecondary, fontSize = 11.sp)
+                            Text(text = "Ver", color = TextSecondary, fontSize = 12.sp)
                             Spacer(modifier = Modifier.width(6.dp))
                             Switch(
                                 checked = showCameraPreview,
                                 onCheckedChange = { showCameraPreview = it },
-                                colors = SwitchDefaults.colors(checkedThumbColor = accent, checkedTrackColor = DarkSurfaceVariant)
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = accent,
+                                    checkedTrackColor = accent.copy(alpha = 0.3f),
+                                    uncheckedThumbColor = TextMuted,
+                                    uncheckedTrackColor = DarkSurfaceVariant
+                                )
                             )
                         }
                     }
 
-                    // Surface CameraX
+                    // Surface CameraX usando DEFAULT_BACK_CAMERA
                     AndroidView(
                         factory = { ctx ->
                             val previewView = PreviewView(ctx)
@@ -445,20 +561,21 @@ fun NodeHubScreen(
                                     }
 
                                     val imageAnalysis = ImageAnalysis.Builder()
-                                        .setTargetResolution(Size(320, 240)) // Baja resolución para procesamiento ágil
+                                        .setTargetResolution(Size(320, 240))
                                         .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                                         .build()
 
                                     imageAnalysis.setAnalyzer(cameraExecutor, analyzer)
 
-                                    val cameraSelector = CameraSelector.DEFAULT_FRONT_CAMERA
+                                    val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
                                     cameraProvider.unbindAll()
-                                    cameraProvider.bindToLifecycle(
+                                    val camera = cameraProvider.bindToLifecycle(
                                         lifecycleOwner,
                                         cameraSelector,
                                         preview,
                                         imageAnalysis
                                     )
+                                    actuatorManager.setCameraControl(camera.cameraControl)
                                     onCameraStatusChange("activa")
                                 } catch (e: Exception) {
                                     onCameraStatusChange("error")
@@ -470,59 +587,131 @@ fun NodeHubScreen(
                         },
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(if (showCameraPreview) 160.dp else 1.dp)
-                            .clip(RoundedCornerShape(6.dp))
+                            .height(if (showCameraPreview) 180.dp else 1.dp)
+                            .clip(RoundedCornerShape(8.dp))
                     )
                 }
             }
         }
 
-        // Estado de Actuadores Locales en el Nodo
+        // 4. Actuadores Físicos y Control de Estroboscopio / Linterna
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(8.dp))
+                .clip(RoundedCornerShape(14.dp))
                 .background(DarkSurface)
-                .border(1.dp, DarkBorder, RoundedCornerShape(8.dp))
+                .border(1.dp, DarkBorder, RoundedCornerShape(14.dp))
                 .padding(16.dp)
         ) {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text(text = "ESTADO DE ACTUADORES FÍSICOS", color = TextMuted, fontSize = 11.sp, letterSpacing = 1.sp)
+            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                Text(text = "ESTADO DE ACTUADORES FÍSICOS", color = TextMuted, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, letterSpacing = 0.8.sp)
 
+                // Sirena
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Outlined.Campaign, contentDescription = null, tint = if (siteState.sirenaActiva) AccentAlarm else TextMuted)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(text = "Sirena Acústica USAGE_ALARM", color = TextPrimary, fontSize = 12.sp)
+                        Icon(
+                            Icons.Outlined.Campaign,
+                            contentDescription = null,
+                            tint = if (siteState.sirenaActiva) AccentAlarm else AccentDisarmed,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column {
+                            Text(text = "Sirena de Alarma Acústica", color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                            Text(text = "Canal de audio USAGE_ALARM + vibración", color = TextMuted, fontSize = 11.sp)
+                        }
                     }
                     Text(
-                        text = if (siteState.sirenaActiva) "SONANDO" else "SILENCIOSA",
-                        color = if (siteState.sirenaActiva) AccentAlarm else TextMuted,
-                        fontSize = 11.sp,
+                        text = if (siteState.sirenaActiva) "SONANDO" else "SILENCIADA",
+                        color = if (siteState.sirenaActiva) AccentAlarm else AccentDisarmed,
+                        fontSize = 12.sp,
                         fontWeight = FontWeight.Bold
                     )
                 }
 
+                // Estroboscopio
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Outlined.FlashOn, contentDescription = null, tint = if (siteState.estroboActivo) AccentAlarm else TextMuted)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(text = "Estroboscopio (Pantalla + Linterna)", color = TextPrimary, fontSize = 12.sp)
+                        Icon(
+                            Icons.Outlined.FlashOn,
+                            contentDescription = null,
+                            tint = if (siteState.estroboActivo) AccentAlarm else AccentDisarmed,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column {
+                            Text(text = "Estroboscopio (Pantalla + Linterna)", color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                            Text(text = "Frecuencia segura a 3 Hz", color = TextMuted, fontSize = 11.sp)
+                        }
                     }
                     Text(
-                        text = if (siteState.estroboActivo) "DESTELLANDO (3 Hz)" else "APAGADO",
-                        color = if (siteState.estroboActivo) AccentAlarm else TextMuted,
-                        fontSize = 11.sp,
+                        text = if (siteState.estroboActivo) "DESTELLANDO" else "APAGADO",
+                        color = if (siteState.estroboActivo) AccentAlarm else AccentDisarmed,
+                        fontSize = 12.sp,
                         fontWeight = FontWeight.Bold
                     )
+                }
+
+                // Ajuste amigable: Permitir linterna física como estrobo
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(DarkSurfaceVariant)
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(text = "Destello con linterna física", color = TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                        Text(text = "Usa el flash LED del dispositivo", color = TextMuted, fontSize = 11.sp)
+                    }
+
+                    Switch(
+                        checked = useTorchStrobe,
+                        onCheckedChange = {
+                            useTorchStrobe = it
+                            if (!it) {
+                                actuatorManager.stopTorchStrobe()
+                            }
+                        },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = accent,
+                            checkedTrackColor = accent.copy(alpha = 0.3f),
+                            uncheckedThumbColor = TextMuted,
+                            uncheckedTrackColor = DarkBackground
+                        )
+                    )
+                }
+
+                // Botón directo para apagar actuadores locales si están sonando
+                if (siteState.sirenaActiva || siteState.estroboActivo) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(DarkSurfaceVariant)
+                            .border(1.dp, AccentAlarm, RoundedCornerShape(8.dp))
+                            .clickable {
+                                actuatorManager.stopAll()
+                            }
+                            .padding(vertical = 12.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(Icons.Outlined.FlashlightOff, contentDescription = null, tint = AccentAlarm, modifier = Modifier.size(16.dp))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(text = "Apagar Actuadores Locales en este Nodo", color = AccentAlarm, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
                 }
             }
         }
@@ -539,32 +728,61 @@ private fun SensorLiveStatusCard(
     activeText: String,
     idleText: String,
     icon: androidx.compose.ui.graphics.vector.ImageVector,
-    activeColor: Color,
     modifier: Modifier = Modifier
 ) {
-    val borderColor = if (isActive) activeColor else DarkBorder
-    val contentColor = if (isActive) activeColor else AccentDisarmed
+    val badgeColor = if (isActive) AccentAlarm else AccentDisarmed
+    val cardBg = if (isActive) DarkSurfaceVariant else DarkSurface
+    val cardBorder = if (isActive) AccentAlarm.copy(alpha = 0.8f) else DarkBorder
 
     Box(
         modifier = modifier
-            .clip(RoundedCornerShape(8.dp))
-            .background(DarkSurface)
-            .border(1.dp, borderColor, RoundedCornerShape(8.dp))
+            .clip(RoundedCornerShape(12.dp))
+            .background(cardBg)
+            .border(1.dp, cardBorder, RoundedCornerShape(12.dp))
             .padding(14.dp)
     ) {
-        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(imageVector = icon, contentDescription = null, tint = contentColor, modifier = Modifier.size(18.dp))
-                Box(modifier = Modifier.size(8.dp).clip(CircleShape).background(contentColor))
+                Icon(imageVector = icon, contentDescription = null, tint = badgeColor, modifier = Modifier.size(20.dp))
+
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(badgeColor.copy(alpha = 0.15f))
+                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                ) {
+                    Text(
+                        text = if (isActive) "ALERTA" else "OK",
+                        color = badgeColor,
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
             }
 
-            Text(text = name, color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-            Text(text = if (isActive) activeText else idleText, color = contentColor, fontSize = 11.sp, fontWeight = FontWeight.Medium)
-            Text(text = subtext, color = TextMuted, fontSize = 10.sp)
+            Text(
+                text = name,
+                color = TextPrimary,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+
+            Text(
+                text = if (isActive) activeText else idleText,
+                color = badgeColor,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Medium
+            )
+
+            Text(
+                text = subtext,
+                color = TextMuted,
+                fontSize = 10.sp
+            )
         }
     }
 }

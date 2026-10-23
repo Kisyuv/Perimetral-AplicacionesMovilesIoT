@@ -1,5 +1,11 @@
 package com.example.ui.screens
 
+import android.Manifest
+import android.content.Context
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -21,22 +27,31 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.CheckCircle
-import androidx.compose.material.icons.outlined.FactCheck
-import androidx.compose.material.icons.outlined.Key
+import androidx.compose.material.icons.outlined.Notifications
+import androidx.compose.material.icons.outlined.NotificationsActive
+import androidx.compose.material.icons.outlined.NotificationsOff
 import androidx.compose.material.icons.outlined.Security
-import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material.icons.outlined.Speed
 import androidx.compose.material3.Icon
+import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import com.example.ui.theme.AccentAlarm
+import com.example.ui.theme.AccentArmed
 import com.example.ui.theme.AccentDisarmed
 import com.example.ui.theme.DarkBackground
 import com.example.ui.theme.DarkBorder
@@ -53,13 +68,40 @@ fun SecurityScreen(
     deviceRole: String?,
     deviceModel: String,
     onChangeRole: () -> Unit,
-    onNavigateToPermissions: () -> Unit,
     onNavigateToTests: () -> Unit,
     onSignOut: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     val accent = LocalAlarmAccentColor.current
     val scrollState = rememberScrollState()
+
+    var notificationsEnabled by remember {
+        mutableStateOf(
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                ContextCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.POST_NOTIFICATIONS
+                ) == PackageManager.PERMISSION_GRANTED
+            } else {
+                true
+            }
+        )
+    }
+
+    var notificationPermissionDeniedMessage by remember { mutableStateOf<String?>(null) }
+
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            notificationsEnabled = true
+            notificationPermissionDeniedMessage = null
+        } else {
+            notificationsEnabled = false
+            notificationPermissionDeniedMessage = "Permiso de notificaciones denegado. Presiona el interruptor nuevamente para concederlo."
+        }
+    }
 
     Column(
         modifier = modifier
@@ -90,44 +132,117 @@ fun SecurityScreen(
             )
         }
 
-        // Acciones Rápidas (Pruebas y Permisos)
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        // Acceso a Pantalla de Pruebas
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(8.dp))
+                .background(DarkSurface)
+                .border(1.dp, accent, RoundedCornerShape(8.dp))
+                .clickable(onClick = onNavigateToTests)
+                .padding(vertical = 14.dp, horizontal = 16.dp)
+                .testTag("nav_to_tests_btn"),
+            contentAlignment = Alignment.Center
         ) {
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(DarkSurface)
-                    .border(1.dp, accent, RoundedCornerShape(6.dp))
-                    .clickable(onClick = onNavigateToTests)
-                    .padding(vertical = 12.dp, horizontal = 10.dp)
-                    .testTag("nav_to_tests_btn"),
-                contentAlignment = Alignment.Center
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Outlined.Speed, contentDescription = null, tint = accent, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(text = "Pantalla Pruebas", color = TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Outlined.Speed, contentDescription = null, tint = accent, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(text = "Abrir Pantalla de Pruebas y Diagnóstico ISO/IEC", color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
             }
+        }
 
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(DarkSurface)
-                    .border(1.dp, DarkBorder, RoundedCornerShape(6.dp))
-                    .clickable(onClick = onNavigateToPermissions)
-                    .padding(vertical = 12.dp, horizontal = 10.dp)
-                    .testTag("nav_to_permissions_btn"),
-                contentAlignment = Alignment.Center
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Outlined.Security, contentDescription = null, tint = TextSecondary, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(text = "Permisos App", color = TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+        // Requerimiento de Notificaciones Push contextual con solicitud bajo demanda
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(8.dp))
+                .background(DarkSurface)
+                .border(1.dp, if (notificationsEnabled) AccentArmed.copy(alpha = 0.5f) else DarkBorder, RoundedCornerShape(8.dp))
+                .padding(16.dp)
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Icon(
+                            imageVector = if (notificationsEnabled) Icons.Outlined.NotificationsActive else Icons.Outlined.NotificationsOff,
+                            contentDescription = null,
+                            tint = if (notificationsEnabled) AccentArmed else TextMuted,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column {
+                            Text(
+                                text = "NOTIFICACIONES PUSH DE ALARMA",
+                                color = TextPrimary,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                letterSpacing = 0.5.sp
+                            )
+                            Text(
+                                text = if (notificationsEnabled) "Alertas activas para intrusión perimetral" else "Notificaciones de alerta desactivadas",
+                                color = if (notificationsEnabled) AccentArmed else TextMuted,
+                                fontSize = 11.sp
+                            )
+                        }
+                    }
+
+                    Switch(
+                        checked = notificationsEnabled,
+                        onCheckedChange = { isChecked ->
+                            if (isChecked) {
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                    val isGranted = ContextCompat.checkSelfPermission(
+                                        context,
+                                        Manifest.permission.POST_NOTIFICATIONS
+                                    ) == PackageManager.PERMISSION_GRANTED
+                                    if (!isGranted) {
+                                        notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                    } else {
+                                        notificationsEnabled = true
+                                        notificationPermissionDeniedMessage = null
+                                    }
+                                } else {
+                                    notificationsEnabled = true
+                                    notificationPermissionDeniedMessage = null
+                                }
+                            } else {
+                                notificationsEnabled = false
+                                notificationPermissionDeniedMessage = null
+                            }
+                        },
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = AccentArmed,
+                            checkedTrackColor = AccentArmed.copy(alpha = 0.3f),
+                            uncheckedThumbColor = TextMuted,
+                            uncheckedTrackColor = DarkBorder
+                        ),
+                        modifier = Modifier.testTag("push_notification_toggle_switch")
+                    )
+                }
+
+                if (notificationPermissionDeniedMessage != null) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(AccentAlarm.copy(alpha = 0.12f))
+                            .border(1.dp, AccentAlarm.copy(alpha = 0.4f), RoundedCornerShape(6.dp))
+                            .padding(10.dp)
+                    ) {
+                        Text(
+                            text = notificationPermissionDeniedMessage!!,
+                            color = AccentAlarm,
+                            fontSize = 11.sp,
+                            lineHeight = 15.sp
+                        )
+                    }
                 }
             }
         }
@@ -157,7 +272,7 @@ fun SecurityScreen(
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text(text = "Rol asignado:", color = TextMuted, fontSize = 12.sp)
                     Text(
-                        text = if (deviceRole == "nodo") "NODO ALARMA (SIMULADO)" else "PANEL DE CONTROL",
+                        text = if (deviceRole == "nodo") "NODO ALARMA (CENTRAL)" else "PANEL DE CONTROL",
                         color = accent,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.Bold
@@ -206,7 +321,7 @@ fun SecurityScreen(
                 IsoCheckItem("5. PIN con Salted SHA-256 & Bloqueo", "Bloqueo por 5 minutos tras 5 intentos fallidos")
                 IsoCheckItem("6. Auditoría Completa de Seguridad", "Registro de login, cambio de rol, armado y alarmas")
                 IsoCheckItem("7. Firebase App Check Habilitado", "Atestación de integridad de la aplicación")
-                IsoCheckItem("8. Red Local WebSocket con mDNS", "Descubrimiento seguro _perimetral._tcp y respaldo en nube")
+                IsoCheckItem("8. Enlace Local Bluetooth P2P y WebSocket", "Comunicación directa offline sin depender de WiFi ni nube")
             }
         }
 

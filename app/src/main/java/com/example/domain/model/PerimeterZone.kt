@@ -7,5 +7,6 @@ data class PerimeterZone(
     val sensorType: String = "",
     val isSecure: Boolean = true,
     val isTampered: Boolean = false,
+    val isActive: Boolean = false, // Desactivada por defecto
     val lastSignalTime: Long = System.currentTimeMillis()
 )

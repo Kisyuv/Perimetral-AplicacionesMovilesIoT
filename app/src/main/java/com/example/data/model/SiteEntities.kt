@@ -13,7 +13,7 @@ data class SiteSchedule(
 data class SiteAlarmState(
     val estado: String = "desarmada", // "desarmada" | "armada" | "alarma"
     val horario: Map<String, Any> = mapOf("inicio" to "08:00", "fin" to "19:00", "dias" to listOf(1L, 2L, 3L, 4L, 5L)),
-    val armadoAutomatico: Boolean = true,
+    val armadoAutomatico: Boolean = false,
     val pinHash: String = "",
     val pinSalt: String = "",
     val sirenaActiva: Boolean = false,

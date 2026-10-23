@@ -19,6 +19,7 @@ import com.example.domain.usecase.ArmAlarmUseCase
 import com.example.domain.usecase.CheckOffHoursIntrusionUseCase
 import com.example.domain.usecase.DisarmAlarmUseCase
 import com.example.domain.usecase.TriggerAlarmUseCase
+import com.example.network.BluetoothSyncManager
 import com.example.network.LocalMeshManager
 import com.example.network.LocalNsdManager
 import com.example.network.LocalWifiManager
@@ -36,6 +37,7 @@ interface AppContainer {
     val keystoreManager: KeystoreManager
     val localNsdManager: LocalNsdManager
     val localMeshManager: LocalMeshManager
+    val bluetoothSyncManager: BluetoothSyncManager
     val firebaseDataSource: IFirebaseDataSource
     val alarmRepository: IAlarmRepository
     val zonesRepository: IZonesRepository
@@ -66,12 +68,16 @@ class DefaultAppContainer(private val context: Context) : AppContainer {
         KeystoreManager(context)
     }
 
+    override val bluetoothSyncManager: BluetoothSyncManager by lazy {
+        BluetoothSyncManager(context, keystoreManager)
+    }
+
     override val localNsdManager: LocalNsdManager by lazy {
         LocalNsdManager(context)
     }
 
     override val localMeshManager: LocalMeshManager by lazy {
-        LocalMeshManager(keystoreManager)
+        LocalMeshManager(keystoreManager, bluetoothSyncManager)
     }
 
     override val authRepository: AuthRepository by lazy {

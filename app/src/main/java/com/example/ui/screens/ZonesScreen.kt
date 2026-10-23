@@ -17,6 +17,11 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.outlined.SensorsOff
+import androidx.compose.material.icons.outlined.Shield
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -27,9 +32,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.domain.model.PerimeterZone
+import com.example.ui.theme.AccentAlarm
+import com.example.ui.theme.AccentArmed
 import com.example.ui.theme.DarkBackground
 import com.example.ui.theme.DarkBorder
 import com.example.ui.theme.DarkSurface
+import com.example.ui.theme.DarkSurfaceVariant
 import com.example.ui.theme.LocalAlarmAccentColor
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextPrimary
@@ -41,38 +49,90 @@ fun ZonesScreen(
     modifier: Modifier = Modifier
 ) {
     val accent = LocalAlarmAccentColor.current
+    val activeCount = zones.count { it.isActive }
 
     Column(
         modifier = modifier
             .fillMaxSize()
             .background(DarkBackground)
-            .padding(horizontal = 24.dp)
+            .padding(horizontal = 20.dp)
             .testTag("zones_screen")
     ) {
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(14.dp))
 
         // Encabezado de Pantalla
-        Column {
-            Text(
-                text = "ZONAS Y SENSORES",
-                color = TextPrimary,
-                fontSize = 24.sp,
-                fontWeight = FontWeight.Medium,
-                letterSpacing = 1.sp
-            )
-            Spacer(modifier = Modifier.height(6.dp))
-            Text(
-                text = "Supervisión de cortinas y haces infrarrojos",
-                color = TextMuted,
-                fontSize = 13.sp,
-                lineHeight = 18.sp
-            )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column {
+                Text(
+                    text = "ZONAS Y SENSORES",
+                    color = TextPrimary,
+                    fontSize = 22.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 1.sp
+                )
+                Spacer(modifier = Modifier.height(3.dp))
+                Text(
+                    text = "Supervisión perimetral de cortinas y haces infrarrojos",
+                    color = TextMuted,
+                    fontSize = 11.sp
+                )
+            }
+
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(if (activeCount > 0) AccentArmed.copy(alpha = 0.15f) else DarkSurfaceVariant)
+                    .border(1.dp, if (activeCount > 0) AccentArmed else DarkBorder, RoundedCornerShape(6.dp))
+                    .padding(horizontal = 10.dp, vertical = 5.dp)
+            ) {
+                Text(
+                    text = if (activeCount > 0) "$activeCount ACTIVAS" else "TODAS DESACTIVADAS",
+                    color = if (activeCount > 0) AccentArmed else TextMuted,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
         }
 
-        Spacer(modifier = Modifier.height(24.dp))
+        Spacer(modifier = Modifier.height(14.dp))
+
+        // Banner informativo sobre el estado predeterminado
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(8.dp))
+                .background(DarkSurface)
+                .border(1.dp, DarkBorder, RoundedCornerShape(8.dp))
+                .padding(12.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    imageVector = if (activeCount > 0) Icons.Outlined.Shield else Icons.Outlined.SensorsOff,
+                    contentDescription = null,
+                    tint = if (activeCount > 0) AccentArmed else TextMuted,
+                    modifier = Modifier.size(20.dp)
+                )
+                Spacer(modifier = Modifier.width(10.dp))
+                Text(
+                    text = if (activeCount > 0)
+                        "Hay $activeCount zona(s) activa(s) reportando telemetría al panel."
+                    else
+                        "Por defecto todas las zonas están desactivadas hasta que sean activadas desde el menú del panel.",
+                    color = TextSecondary,
+                    fontSize = 11.sp,
+                    lineHeight = 15.sp
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(14.dp))
 
         if (zones.isEmpty()) {
-            // Estado vacío con tarjeta de título
+            // Estado vacío con tarjeta
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -118,13 +178,19 @@ private fun ZoneItemCard(
     zone: PerimeterZone,
     accent: androidx.compose.ui.graphics.Color
 ) {
+    val isZoneActive = zone.isActive
+
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(6.dp))
+            .clip(RoundedCornerShape(8.dp))
             .background(DarkSurface)
-            .border(1.dp, DarkBorder, RoundedCornerShape(6.dp))
-            .padding(16.dp),
+            .border(
+                1.dp,
+                if (isZoneActive) AccentArmed.copy(alpha = 0.5f) else DarkBorder,
+                RoundedCornerShape(8.dp)
+            )
+            .padding(14.dp),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -134,7 +200,7 @@ private fun ZoneItemCard(
                     text = zone.id,
                     color = accent,
                     fontSize = 11.sp,
-                    fontWeight = FontWeight.Medium,
+                    fontWeight = FontWeight.Bold,
                     letterSpacing = 1.sp
                 )
                 Spacer(modifier = Modifier.width(8.dp))
@@ -149,7 +215,7 @@ private fun ZoneItemCard(
                 text = zone.name,
                 color = TextPrimary,
                 fontSize = 14.sp,
-                fontWeight = FontWeight.Normal
+                fontWeight = FontWeight.SemiBold
             )
             Spacer(modifier = Modifier.height(2.dp))
             Text(
@@ -159,11 +225,47 @@ private fun ZoneItemCard(
             )
         }
 
-        Box(
-            modifier = Modifier
-                .size(8.dp)
-                .clip(CircleShape)
-                .background(if (zone.isSecure) accent else com.example.ui.theme.AccentAlarm)
-        )
+        Column(
+            horizontalAlignment = Alignment.End,
+            verticalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            // Badge de estado de zona (ACTIVADA vs DESACTIVADA)
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(
+                        if (isZoneActive) AccentArmed.copy(alpha = 0.15f)
+                        else DarkSurfaceVariant
+                    )
+                    .border(
+                        1.dp,
+                        if (isZoneActive) AccentArmed else DarkBorder,
+                        RoundedCornerShape(4.dp)
+                    )
+                    .padding(horizontal = 8.dp, vertical = 3.dp)
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(6.dp)
+                            .clip(CircleShape)
+                            .background(if (isZoneActive) AccentArmed else TextMuted)
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text(
+                        text = if (isZoneActive) "ACTIVADA" else "DESACTIVADA",
+                        color = if (isZoneActive) AccentArmed else TextMuted,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+
+            Text(
+                text = if (isZoneActive) "En vigilancia activa" else "Inactivo (sin armar)",
+                color = if (isZoneActive) AccentArmed else TextMuted,
+                fontSize = 10.sp
+            )
+        }
     }
 }

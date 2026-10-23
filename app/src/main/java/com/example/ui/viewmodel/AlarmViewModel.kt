@@ -36,6 +36,12 @@ class AlarmViewModel(
     val keystoreManager: KeystoreManager = appContainer.keystoreManager
     val localNsdManager: LocalNsdManager = appContainer.localNsdManager
     val localMeshManager: LocalMeshManager = appContainer.localMeshManager
+    val bluetoothSyncManager: com.example.network.BluetoothSyncManager = appContainer.bluetoothSyncManager
+
+    val isBluetoothConnected: StateFlow<Boolean> = bluetoothSyncManager.isConnected
+    val connectedBluetoothDevice: StateFlow<String?> = bluetoothSyncManager.connectedDeviceName
+    val isBluetoothDiscovering: StateFlow<Boolean> = bluetoothSyncManager.isDiscovering
+    val discoveredBluetoothDevices: StateFlow<List<com.example.network.DiscoveredBluetoothDevice>> = bluetoothSyncManager.discoveredDevices
 
     private val _currentUser = MutableStateFlow<FirebaseUser?>(authRepository.currentUser)
     val currentUser: StateFlow<FirebaseUser?> = _currentUser.asStateFlow()
@@ -96,6 +102,7 @@ class AlarmViewModel(
     init {
         viewModelScope.launch {
             siteAlarmRepository.initializeSiteIfNeeded("bodega_central")
+            siteAlarmRepository.resetSensors("bodega_central")
         }
 
         // Sincronizar estado global del sitio con el tema visual de acento único
@@ -149,13 +156,31 @@ class AlarmViewModel(
                     localMeshManager.disconnectClient()
                     localMeshManager.startLocalServer(8765)
                     localNsdManager.registerNodeService(8765, "Nodo Bodega (${deviceModel.take(12)})")
+                    bluetoothSyncManager.startBluetoothServer()
                 } else if (role == "panel") {
                     localMeshManager.stopLocalServer()
                     localNsdManager.unregisterNodeService()
                     localNsdManager.startDiscovery()
+                    bluetoothSyncManager.stopBluetoothServer()
                 }
             }
         }
+    }
+
+    fun connectBluetoothNode(address: String, onResult: (Boolean) -> Unit = {}) {
+        bluetoothSyncManager.connectToNode(address, onResult)
+    }
+
+    fun disconnectBluetoothNode() {
+        bluetoothSyncManager.disconnect()
+    }
+
+    fun startBluetoothDiscovery() {
+        bluetoothSyncManager.startDiscovery()
+    }
+
+    fun stopBluetoothDiscovery() {
+        bluetoothSyncManager.stopDiscovery()
     }
 
     private fun observeUserDeviceRole(userId: String) {
@@ -213,9 +238,39 @@ class AlarmViewModel(
             siteAlarmRepository.recordSensorTrigger(
                 siteId = "bodega_central",
                 sensorType = "pir",
-                detail = "Movimiento detectado por cámara frontal",
+                detail = "Movimiento detectado por cámara trasera",
                 origen = "nodo"
             )
+        }
+    }
+
+    fun resetSensors() {
+        viewModelScope.launch {
+            siteAlarmRepository.resetSensors("bodega_central")
+        }
+    }
+
+    fun activateZone(zoneId: String) {
+        viewModelScope.launch {
+            appContainer.zonesRepository.setZoneActive(zoneId, true)
+        }
+    }
+
+    fun deactivateZone(zoneId: String) {
+        viewModelScope.launch {
+            appContainer.zonesRepository.setZoneActive(zoneId, false)
+        }
+    }
+
+    fun activateAllZones() {
+        viewModelScope.launch {
+            appContainer.zonesRepository.setAllZonesActive(true)
+        }
+    }
+
+    fun deactivateAllZones() {
+        viewModelScope.launch {
+            appContainer.zonesRepository.setAllZonesActive(false)
         }
     }
 
@@ -274,6 +329,8 @@ class AlarmViewModel(
     fun signOut() {
         viewModelScope.launch {
             actuatorManager.stopAll()
+            bluetoothSyncManager.stopBluetoothServer()
+            bluetoothSyncManager.disconnect()
             localMeshManager.stopLocalServer()
             localMeshManager.disconnectClient()
             localNsdManager.unregisterNodeService()
@@ -287,6 +344,8 @@ class AlarmViewModel(
 
     override fun onCleared() {
         super.onCleared()
+        bluetoothSyncManager.stopBluetoothServer()
+        bluetoothSyncManager.disconnect()
         localMeshManager.stopLocalServer()
         localMeshManager.disconnectClient()
         localNsdManager.unregisterNodeService()

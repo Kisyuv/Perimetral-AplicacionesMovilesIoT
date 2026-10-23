@@ -53,12 +53,6 @@ enum class Screen(
         subtitle = "Gestión de PIN de bodega y autorización",
         icon = Icons.Outlined.Lock
     ),
-    PERMISSIONS(
-        route = "permissions",
-        title = "Permisos",
-        subtitle = "Gestión de permisos de hardware y red",
-        icon = Icons.Outlined.Security
-    ),
     TESTS(
         route = "tests",
         title = "Pruebas",

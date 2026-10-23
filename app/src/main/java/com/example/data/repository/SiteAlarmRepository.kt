@@ -8,15 +8,22 @@ import com.example.security.PinSecurity
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.Query
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 import java.util.Calendar
 
 class SiteAlarmRepository(
     private val firestore: FirebaseFirestore
 ) {
+
+    private val repoScope = CoroutineScope(Dispatchers.IO)
+    private val _localSiteState = kotlinx.coroutines.flow.MutableStateFlow(SiteAlarmState())
 
     suspend fun initializeSiteIfNeeded(siteId: String = "bodega_central") {
         try {
@@ -26,7 +33,7 @@ class SiteAlarmRepository(
                 val initialSite = mapOf(
                     "estado" to "desarmada",
                     "horario" to mapOf("inicio" to "08:00", "fin" to "19:00", "dias" to listOf(1L, 2L, 3L, 4L, 5L)),
-                    "armadoAutomatico" to true,
+                    "armadoAutomatico" to false,
                     "pinHash" to defaultHash,
                     "pinSalt" to defaultSalt,
                     "sirenaActiva" to false,
@@ -36,7 +43,7 @@ class SiteAlarmRepository(
                 firestore.collection("sitios").document(siteId).set(initialSite).await()
             }
 
-            // Inicializar documento de sensores si no existe
+            // Inicializar documento de sensores si no existe, o resetear estado si ya existe
             val sensorDoc = firestore.collection("sitios").document(siteId)
                 .collection("sensores").document("estado").get().await()
             if (!sensorDoc.exists()) {
@@ -48,6 +55,15 @@ class SiteAlarmRepository(
                             "reedPuertaAbierta" to false,
                             "ultimoPir" to 0L,
                             "ultimoReed" to 0L
+                        )
+                    ).await()
+            } else {
+                firestore.collection("sitios").document(siteId)
+                    .collection("sensores").document("estado")
+                    .update(
+                        mapOf(
+                            "pirMovimiento" to false,
+                            "reedPuertaAbierta" to false
                         )
                     ).await()
             }
@@ -72,13 +88,15 @@ class SiteAlarmRepository(
     }
 
     fun observeSiteState(siteId: String = "bodega_central"): Flow<SiteAlarmState> = callbackFlow {
+        trySend(_localSiteState.value)
         val docRef = firestore.collection("sitios").document(siteId)
         val registration = docRef.addSnapshotListener { snapshot, error ->
             if (error != null || snapshot == null || !snapshot.exists()) {
-                trySend(SiteAlarmState())
+                trySend(_localSiteState.value)
                 return@addSnapshotListener
             }
             val state = snapshot.toObject(SiteAlarmState::class.java) ?: SiteAlarmState()
+            _localSiteState.value = state
             trySend(state)
         }
         awaitClose { registration.remove() }
@@ -137,16 +155,23 @@ class SiteAlarmRepository(
     }
 
     suspend fun armSystem(siteId: String = "bodega_central", origen: String = "panel"): Result<Unit> {
+        _localSiteState.value = _localSiteState.value.copy(
+            estado = "armada",
+            sirenaActiva = false,
+            estroboActivo = false
+        )
         return try {
-            firestore.collection("sitios").document(siteId).update(
+            firestore.collection("sitios").document(siteId).set(
                 mapOf(
                     "estado" to "armada",
                     "sirenaActiva" to false,
                     "estroboActivo" to false,
                     "ultimaActualizacion" to FieldValue.serverTimestamp()
-                )
+                ),
+                com.google.firebase.firestore.SetOptions.merge()
             ).await()
 
+            resetSensors(siteId)
             logEvent(siteId, "armado", "Sistema armado por operador", origen)
             Result.success(Unit)
         } catch (e: Exception) {
@@ -164,15 +189,23 @@ class SiteAlarmRepository(
                 return Result.failure(IllegalArgumentException("PIN de 4 dígitos incorrecto."))
             }
 
-            firestore.collection("sitios").document(siteId).update(
+            _localSiteState.value = _localSiteState.value.copy(
+                estado = "desarmada",
+                sirenaActiva = false,
+                estroboActivo = false
+            )
+
+            firestore.collection("sitios").document(siteId).set(
                 mapOf(
                     "estado" to "desarmada",
                     "sirenaActiva" to false,
                     "estroboActivo" to false,
                     "ultimaActualizacion" to FieldValue.serverTimestamp()
-                )
+                ),
+                com.google.firebase.firestore.SetOptions.merge()
             ).await()
 
+            resetSensors(siteId)
             logEvent(siteId, "desarmado", "Sistema desarmado mediante PIN autorizado", origen)
             Result.success(Unit)
         } catch (e: Exception) {
@@ -249,7 +282,17 @@ class SiteAlarmRepository(
                 // Si está desarmada, solo registrar el evento sin disparar alarma
                 logEvent(siteId, sensorType, detail, origen)
             }
+
+            // Auto-restablecer el pulso del sensor a inactivo después de 4 segundos
+            repoScope.launch {
+                delay(4000L)
+                resetSensorStatus(siteId, resetPir = (sensorType == "pir"), resetReed = (sensorType == "reed"))
+            }
         } catch (_: Exception) {}
+    }
+
+    suspend fun resetSensors(siteId: String = "bodega_central") {
+        resetSensorStatus(siteId, resetPir = true, resetReed = true)
     }
 
     suspend fun resetSensorStatus(siteId: String = "bodega_central", resetPir: Boolean = true, resetReed: Boolean = false) {
@@ -270,14 +313,21 @@ class SiteAlarmRepository(
         dias: List<Long>,
         armadoAutomatico: Boolean
     ): Result<Unit> {
+        val horarioMap = mapOf("inicio" to inicio, "fin" to fin, "dias" to dias)
+        // Optimización clave: actualizar estado en memoria de inmediato para que el switch
+        // funcione sin trabas desde la primera ejecución sin reiniciar la app
+        _localSiteState.value = _localSiteState.value.copy(
+            horario = horarioMap,
+            armadoAutomatico = armadoAutomatico
+        )
         return try {
-            val horarioMap = mapOf("inicio" to inicio, "fin" to fin, "dias" to dias)
-            firestore.collection("sitios").document(siteId).update(
+            firestore.collection("sitios").document(siteId).set(
                 mapOf(
                     "horario" to horarioMap,
                     "armadoAutomatico" to armadoAutomatico,
                     "ultimaActualizacion" to FieldValue.serverTimestamp()
-                )
+                ),
+                com.google.firebase.firestore.SetOptions.merge()
             ).await()
             logEvent(siteId, "armado", "Horario actualizado: $inicio a $fin (Auto-armado: $armadoAutomatico)", "panel")
             Result.success(Unit)
