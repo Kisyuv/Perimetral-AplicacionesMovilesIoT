@@ -40,6 +40,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.SiteAlarmState
+import com.example.ui.theme.DotoFamily
 import com.example.ui.theme.DarkBackground
 import com.example.ui.theme.DarkBorder
 import com.example.ui.theme.DarkSurface
@@ -158,6 +159,7 @@ fun ScheduleScreen(
                 text = "HORARIOS Y REGLAS",
                 color = TextPrimary,
                 fontSize = 24.sp,
+                fontFamily = DotoFamily,
                 fontWeight = FontWeight.Medium,
                 letterSpacing = 1.sp
             )

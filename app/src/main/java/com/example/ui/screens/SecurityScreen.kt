@@ -50,6 +50,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import com.example.ui.theme.DotoFamily
 import com.example.ui.theme.AccentAlarm
 import com.example.ui.theme.AccentArmed
 import com.example.ui.theme.AccentDisarmed
@@ -76,17 +77,21 @@ fun SecurityScreen(
     val accent = LocalAlarmAccentColor.current
     val scrollState = rememberScrollState()
 
+    val devicePrefs = remember { context.getSharedPreferences("perimetral_device_prefs", android.content.Context.MODE_PRIVATE) }
+    fun hasNotificationPermission(): Boolean =
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+
+    // Activo = permiso concedido y preferencia guardada (la lee el servicio de monitoreo)
     var notificationsEnabled by remember {
         mutableStateOf(
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                ContextCompat.checkSelfPermission(
-                    context,
-                    Manifest.permission.POST_NOTIFICATIONS
-                ) == PackageManager.PERMISSION_GRANTED
-            } else {
-                true
-            }
+            hasNotificationPermission() &&
+                devicePrefs.getBoolean(com.example.data.remote.DeviceManager.KEY_ALARM_NOTIFICATIONS, true)
         )
+    }
+    fun setNotificationsEnabled(enabled: Boolean) {
+        notificationsEnabled = enabled
+        devicePrefs.edit().putBoolean(com.example.data.remote.DeviceManager.KEY_ALARM_NOTIFICATIONS, enabled).apply()
     }
 
     var notificationPermissionDeniedMessage by remember { mutableStateOf<String?>(null) }
@@ -95,10 +100,10 @@ fun SecurityScreen(
         contract = ActivityResultContracts.RequestPermission()
     ) { isGranted ->
         if (isGranted) {
-            notificationsEnabled = true
+            setNotificationsEnabled(true)
             notificationPermissionDeniedMessage = null
         } else {
-            notificationsEnabled = false
+            setNotificationsEnabled(false)
             notificationPermissionDeniedMessage = "Permiso de notificaciones denegado. Presiona el interruptor nuevamente para concederlo."
         }
     }
@@ -120,6 +125,7 @@ fun SecurityScreen(
                 text = "AJUSTES Y SEGURIDAD",
                 color = TextPrimary,
                 fontSize = 22.sp,
+                fontFamily = DotoFamily,
                 fontWeight = FontWeight.Bold,
                 letterSpacing = 1.sp
             )
@@ -205,15 +211,15 @@ fun SecurityScreen(
                                     if (!isGranted) {
                                         notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
                                     } else {
-                                        notificationsEnabled = true
+                                        setNotificationsEnabled(true)
                                         notificationPermissionDeniedMessage = null
                                     }
                                 } else {
-                                    notificationsEnabled = true
+                                    setNotificationsEnabled(true)
                                     notificationPermissionDeniedMessage = null
                                 }
                             } else {
-                                notificationsEnabled = false
+                                setNotificationsEnabled(false)
                                 notificationPermissionDeniedMessage = null
                             }
                         },
@@ -232,13 +238,13 @@ fun SecurityScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(6.dp))
-                            .background(AccentAlarm.copy(alpha = 0.12f))
-                            .border(1.dp, AccentAlarm.copy(alpha = 0.4f), RoundedCornerShape(6.dp))
+                            .background(DarkSurfaceVariant)
+                            .border(1.dp, DarkBorder, RoundedCornerShape(6.dp))
                             .padding(10.dp)
                     ) {
                         Text(
                             text = notificationPermissionDeniedMessage!!,
-                            color = AccentAlarm,
+                            color = TextPrimary,
                             fontSize = 11.sp,
                             lineHeight = 15.sp
                         )
@@ -321,7 +327,7 @@ fun SecurityScreen(
                 IsoCheckItem("5. PIN con Salted SHA-256 & Bloqueo", "Bloqueo por 5 minutos tras 5 intentos fallidos")
                 IsoCheckItem("6. Auditoría Completa de Seguridad", "Registro de login, cambio de rol, armado y alarmas")
                 IsoCheckItem("7. Firebase App Check Habilitado", "Atestación de integridad de la aplicación")
-                IsoCheckItem("8. Enlace Local Bluetooth P2P y WebSocket", "Comunicación directa offline sin depender de WiFi ni nube")
+                IsoCheckItem("8. Enlace Local WebSocket por WiFi", "Comunicación directa con el nodo en la red local sin depender de la nube")
             }
         }
 
@@ -331,13 +337,13 @@ fun SecurityScreen(
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(6.dp))
                 .background(DarkSurface)
-                .border(1.dp, AccentAlarm, RoundedCornerShape(6.dp))
+                .border(1.dp, TextPrimary, RoundedCornerShape(6.dp))
                 .clickable(onClick = onSignOut)
                 .padding(vertical = 12.dp)
                 .testTag("sign_out_button"),
             contentAlignment = Alignment.Center
         ) {
-            Text(text = "CERRAR SESIÓN", color = AccentAlarm, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+            Text(text = "CERRAR SESIÓN", color = TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
         }
 
         Spacer(modifier = Modifier.height(20.dp))

@@ -28,7 +28,9 @@ import com.example.ui.navigation.Screen
 import com.example.ui.theme.DarkBackground
 import com.example.ui.theme.DarkBorderSubtle
 import com.example.ui.theme.DarkSurface
+import com.example.ui.theme.DarkBorder
 import com.example.ui.theme.LocalAlarmAccentColor
+import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextSecondary
 
@@ -61,6 +63,7 @@ fun PerimetralBottomBar(
                 modifier = Modifier
                     .clip(RoundedCornerShape(6.dp))
                     .background(if (isSelected) DarkSurface else DarkBackground)
+                    .border(1.dp, if (isSelected) DarkBorder else DarkBackground, RoundedCornerShape(6.dp))
                     .clickable { onScreenSelected(screen) }
                     .padding(horizontal = 14.dp, vertical = 8.dp)
                     .testTag("nav_item_${screen.route}"),
@@ -84,7 +87,7 @@ fun PerimetralBottomBar(
                         Screen.SECURITY -> "Seguridad"
                         Screen.TESTS -> "Pruebas"
                     },
-                    color = if (isSelected) TextSecondary else TextMuted,
+                    color = if (isSelected) TextPrimary else TextMuted,
                     fontSize = 11.sp,
                     letterSpacing = 0.5.sp
                 )

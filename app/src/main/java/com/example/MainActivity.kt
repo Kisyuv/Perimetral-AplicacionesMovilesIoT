@@ -1,5 +1,6 @@
 package com.example
 
+import android.Manifest
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
@@ -12,7 +13,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Scaffold
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -20,13 +21,13 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.service.AlarmMonitoringService
 import com.example.ui.components.PerimetralBottomBar
 import com.example.ui.components.PerimetralTopBar
+import com.example.ui.components.rememberPermissionRequest
 import com.example.ui.navigation.Screen
 import com.example.ui.screens.AuthScreen
 import com.example.ui.screens.DashboardScreen
 import com.example.ui.screens.EventsScreen
 import com.example.ui.screens.NetworkScreen
 import com.example.ui.screens.NodeHubScreen
-import com.example.ui.screens.PermissionsScreen
 import com.example.ui.screens.RoleSelectionScreen
 import com.example.ui.screens.ScheduleScreen
 import com.example.ui.screens.SecurityScreen
@@ -72,15 +73,36 @@ class MainActivity : ComponentActivity() {
             val zones by viewModel.zones.collectAsStateWithLifecycle()
             val connectionType by viewModel.connectionType.collectAsStateWithLifecycle()
             val discoveredNodes by viewModel.discoveredNodes.collectAsStateWithLifecycle()
-            val isBluetoothConnected by viewModel.isBluetoothConnected.collectAsStateWithLifecycle()
-            val connectedBluetoothDevice by viewModel.connectedBluetoothDevice.collectAsStateWithLifecycle()
+            val peerLinkReady by viewModel.peerLinkReady.collectAsStateWithLifecycle()
+            val nodeMode by viewModel.nodeMode.collectAsStateWithLifecycle()
+            val mqttChannel by viewModel.mqttChannel.collectAsStateWithLifecycle()
+            val esp32Estado by viewModel.esp32Estado.collectAsStateWithLifecycle()
+
+            // Permiso de red WiFi local / SSID: se solicita al abrir la app
+            val wifiPermission = rememberPermissionRequest(
+                permissions = wifiPermissions(),
+                deniedMessage = "Se negó el permiso de ubicación: no se puede leer el SSID ni buscar nodos en la red WiFi local."
+            )
+            LaunchedEffect(Unit) {
+                if (!wifiPermission.isGranted) wifiPermission.request()
+            }
+
+            // Avisos del enlace local y de comandos (ACK ausente, clave distinta, PIN incorrecto...)
+            LaunchedEffect(viewModel) {
+                viewModel.userMessages.collect { message ->
+                    android.widget.Toast.makeText(this@MainActivity, message, android.widget.Toast.LENGTH_LONG).show()
+                }
+            }
 
             PerimetralTheme(systemState = currentState) {
                 // 1. Si no hay usuario autenticado, mostrar pantalla de autenticación
                 if (currentUser == null) {
                     AuthScreen(
                         authRepository = viewModel.authRepository,
-                        onAuthSuccess = { /* AuthState listener actualiza el estado automáticamente */ }
+                        onAuthSuccess = { /* AuthState listener actualiza el estado automáticamente */ },
+                        nodeMode = nodeMode,
+                        mqttChannel = mqttChannel,
+                        onNodeConfigChange = viewModel::setNodeConfig
                     )
                 }
                 // 2. Si el usuario está autenticado pero el dispositivo no tiene rol asignado (o pidió cambiarlo)
@@ -145,7 +167,8 @@ class MainActivity : ComponentActivity() {
                                             },
                                             onResetSensors = {
                                                 viewModel.resetSensors()
-                                            }
+                                            },
+                                            onSelectLens = { lente -> viewModel.updateCameraLens(lente) }
                                         )
                                     } else {
                                         DashboardScreen(
@@ -161,6 +184,7 @@ class MainActivity : ComponentActivity() {
                                             onSimulateSensor = { tipo, detalle ->
                                                 viewModel.simulateSensorTrigger(tipo, detalle)
                                             },
+                                            onSimulateZone = { zoneId -> viewModel.simulateZone(zoneId) },
                                             onUpdateCameraConfig = { modo, sens, tiempo ->
                                                 viewModel.updateCameraConfig(modo, sens, tiempo)
                                             },
@@ -197,37 +221,20 @@ class MainActivity : ComponentActivity() {
                                     onRefreshDiscovery = {
                                         viewModel.refreshDiscovery()
                                     },
-                                    isBluetoothConnected = isBluetoothConnected,
-                                    connectedBluetoothDevice = connectedBluetoothDevice,
-                                    pairedBluetoothDevices = viewModel.bluetoothSyncManager.getPairedDevices(),
-                                    onConnectBluetooth = { address ->
-                                        viewModel.connectBluetoothNode(address) { success ->
-                                            if (success) {
-                                                viewModel.localMeshManager.updateConnectionType(com.example.network.ConnectionType.BLUETOOTH)
-                                            }
-                                        }
-                                    },
-                                    onDisconnectBluetooth = {
-                                        viewModel.disconnectBluetoothNode()
-                                    },
-                                    onActivateBluetooth = {
-                                        viewModel.bluetoothSyncManager.activateBluetooth { success ->
-                                            if (success) {
-                                                viewModel.localMeshManager.updateConnectionType(com.example.network.ConnectionType.BLUETOOTH)
-                                            }
-                                        }
-                                    }
+                                    wifiPermission = wifiPermission,
+                                    peerLinkReady = peerLinkReady,
+                                    nodeMode = nodeMode,
+                                    mqttChannel = mqttChannel,
+                                    esp32 = esp32Estado
                                 )
                                 Screen.SECURITY -> SecurityScreen(
                                     userEmail = currentUser?.email ?: "",
                                     deviceRole = deviceRole,
                                     deviceModel = viewModel.deviceModel,
                                     onChangeRole = { viewModel.requestChangeRole() },
-                                    onNavigateToPermissions = { viewModel.selectScreen(Screen.PERMISSIONS) },
                                     onNavigateToTests = { viewModel.selectScreen(Screen.TESTS) },
                                     onSignOut = { viewModel.signOut() }
                                 )
-                                Screen.PERMISSIONS -> PermissionsScreen()
                                 Screen.TESTS -> TestDiagnosticsScreen(
                                     siteAlarmRepository = viewModel.siteAlarmRepository,
                                     keystoreManager = viewModel.keystoreManager,
@@ -241,5 +248,14 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+}
+
+private fun wifiPermissions(): Array<String> {
+    val base = arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
+    return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        base + Manifest.permission.NEARBY_WIFI_DEVICES
+    } else {
+        base
     }
 }

@@ -32,6 +32,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.domain.model.PerimeterZone
+import com.example.ui.theme.DotoFamily
 import com.example.ui.theme.AccentAlarm
 import com.example.ui.theme.AccentArmed
 import com.example.ui.theme.DarkBackground
@@ -71,6 +72,7 @@ fun ZonesScreen(
                     text = "ZONAS Y SENSORES",
                     color = TextPrimary,
                     fontSize = 22.sp,
+                    fontFamily = DotoFamily,
                     fontWeight = FontWeight.Bold,
                     letterSpacing = 1.sp
                 )

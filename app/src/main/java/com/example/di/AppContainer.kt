@@ -10,6 +10,7 @@ import com.example.data.repository.AlarmRepositoryImpl
 import com.example.data.repository.AuthRepository
 import com.example.data.repository.DeviceRoleRepository
 import com.example.data.repository.EventsRepositoryImpl
+import com.example.data.repository.PeerKeyRepository
 import com.example.data.repository.SiteAlarmRepository
 import com.example.data.repository.ZonesRepositoryImpl
 import com.example.domain.repository.IAlarmRepository
@@ -19,9 +20,10 @@ import com.example.domain.usecase.ArmAlarmUseCase
 import com.example.domain.usecase.CheckOffHoursIntrusionUseCase
 import com.example.domain.usecase.DisarmAlarmUseCase
 import com.example.domain.usecase.TriggerAlarmUseCase
-import com.example.network.BluetoothSyncManager
+import com.example.network.ConnectivityMonitor
 import com.example.network.LocalMeshManager
 import com.example.network.LocalNsdManager
+import com.example.network.Esp32MqttBridge
 import com.example.network.LocalWifiManager
 import com.example.security.KeystoreManager
 import com.example.security.SecurityCodeManager
@@ -33,17 +35,19 @@ interface AppContainer {
     val deviceManager: DeviceManager
     val deviceRoleRepository: DeviceRoleRepository
     val siteAlarmRepository: SiteAlarmRepository
+    val esp32MqttBridge: Esp32MqttBridge
     val alarmActuatorManager: AlarmActuatorManager
     val keystoreManager: KeystoreManager
     val localNsdManager: LocalNsdManager
     val localMeshManager: LocalMeshManager
-    val bluetoothSyncManager: BluetoothSyncManager
     val firebaseDataSource: IFirebaseDataSource
     val alarmRepository: IAlarmRepository
     val zonesRepository: IZonesRepository
     val eventsRepository: IEventsRepository
     val securityCodeManager: SecurityCodeManager
     val localWifiManager: LocalWifiManager
+    val peerKeyRepository: PeerKeyRepository
+    val connectivityMonitor: ConnectivityMonitor
     val armAlarmUseCase: ArmAlarmUseCase
     val disarmAlarmUseCase: DisarmAlarmUseCase
     val triggerAlarmUseCase: TriggerAlarmUseCase
@@ -68,16 +72,12 @@ class DefaultAppContainer(private val context: Context) : AppContainer {
         KeystoreManager(context)
     }
 
-    override val bluetoothSyncManager: BluetoothSyncManager by lazy {
-        BluetoothSyncManager(context, keystoreManager)
-    }
-
     override val localNsdManager: LocalNsdManager by lazy {
         LocalNsdManager(context)
     }
 
     override val localMeshManager: LocalMeshManager by lazy {
-        LocalMeshManager(keystoreManager, bluetoothSyncManager)
+        LocalMeshManager(keystoreManager)
     }
 
     override val authRepository: AuthRepository by lazy {
@@ -89,7 +89,11 @@ class DefaultAppContainer(private val context: Context) : AppContainer {
     }
 
     override val siteAlarmRepository: SiteAlarmRepository by lazy {
-        SiteAlarmRepository(firestore)
+        SiteAlarmRepository(firestore, firebaseAuth)
+    }
+
+    override val esp32MqttBridge: Esp32MqttBridge by lazy {
+        Esp32MqttBridge(siteAlarmRepository)
     }
 
     override val alarmActuatorManager: AlarmActuatorManager by lazy {
@@ -118,6 +122,14 @@ class DefaultAppContainer(private val context: Context) : AppContainer {
 
     override val localWifiManager: LocalWifiManager by lazy {
         LocalWifiManager(context)
+    }
+
+    override val connectivityMonitor: ConnectivityMonitor by lazy {
+        ConnectivityMonitor(context)
+    }
+
+    override val peerKeyRepository: PeerKeyRepository by lazy {
+        PeerKeyRepository(firestore, keystoreManager)
     }
 
     override val armAlarmUseCase: ArmAlarmUseCase by lazy {

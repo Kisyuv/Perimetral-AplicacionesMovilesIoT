@@ -62,6 +62,8 @@ import androidx.credentials.exceptions.GetCredentialCancellationException
 import com.example.R
 import com.example.data.repository.AuthRepository
 import com.example.data.repository.AuthResult
+import com.example.network.NodeMode
+import com.example.ui.theme.DotoFamily
 import com.example.ui.theme.AccentAlarm
 import com.example.ui.theme.AccentDisarmed
 import com.example.ui.theme.DarkBackground
@@ -89,6 +91,9 @@ enum class AuthMode {
 fun AuthScreen(
     authRepository: AuthRepository,
     onAuthSuccess: () -> Unit,
+    nodeMode: NodeMode,
+    mqttChannel: String,
+    onNodeConfigChange: (NodeMode, String) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -101,6 +106,7 @@ fun AuthScreen(
     var password by remember { mutableStateOf("") }
     var nombre by remember { mutableStateOf("") }
     var passwordVisible by remember { mutableStateOf(false) }
+    var canalTexto by remember { mutableStateOf(mqttChannel) }
 
     var isLoading by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
@@ -247,6 +253,7 @@ fun AuthScreen(
             text = "PERIMETRAL",
             color = TextPrimary,
             fontSize = 24.sp,
+            fontFamily = DotoFamily,
             fontWeight = FontWeight.Medium,
             letterSpacing = 3.sp
         )
@@ -324,12 +331,12 @@ fun AuthScreen(
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(6.dp))
                         .background(DarkSurface)
-                        .border(1.dp, AccentAlarm, RoundedCornerShape(6.dp))
+                        .border(1.dp, TextSecondary, RoundedCornerShape(6.dp))
                         .padding(14.dp)
                 ) {
                     Text(
                         text = error,
-                        color = AccentAlarm,
+                        color = TextPrimary,
                         fontSize = 12.sp,
                         lineHeight = 18.sp
                     )
@@ -604,7 +611,84 @@ fun AuthScreen(
             }
         }
 
+        Spacer(modifier = Modifier.height(24.dp))
+
+        NodeModeSelector(
+            nodeMode = nodeMode,
+            canal = canalTexto,
+            onModeChange = { onNodeConfigChange(it, canalTexto) },
+            onCanalChange = {
+                canalTexto = it
+                onNodeConfigChange(nodeMode, it)
+            }
+        )
+
         Spacer(modifier = Modifier.height(32.dp))
+    }
+}
+
+/** Quién hace de nodo de sensores. Se elige antes de iniciar sesión; con un ESP32 el teléfono es panel. */
+@Composable
+private fun NodeModeSelector(
+    nodeMode: NodeMode,
+    canal: String,
+    onModeChange: (NodeMode) -> Unit,
+    onCanalChange: (String) -> Unit
+) {
+    val accent = LocalAlarmAccentColor.current
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text("NODO DE SENSORES", color = TextMuted, fontSize = 11.sp, letterSpacing = 1.sp)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            NodeMode.entries.forEach { mode ->
+                val selected = mode == nodeMode
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(DarkSurface)
+                        .border(1.dp, if (selected) accent else DarkBorder, RoundedCornerShape(6.dp))
+                        .clickable { onModeChange(mode) }
+                        .padding(vertical = 10.dp)
+                        .testTag("node_mode_${mode.name}"),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = mode.label,
+                        color = if (selected) accent else TextSecondary,
+                        fontSize = 12.sp,
+                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal
+                    )
+                }
+            }
+        }
+        Text(
+            text = when (nodeMode) {
+                NodeMode.TELEFONO -> "Un teléfono con la app hace de nodo: lee los sensores y activa la sirena."
+                NodeMode.ESP32_WOKWI -> "Simula el ESP32 en wokwi.com (ver hardware/esp32-bodega). Este teléfono será panel."
+                NodeMode.ESP32_FISICO -> "Un ESP32 con sensores y sirena conectado por MQTT. Este teléfono será panel."
+            },
+            color = TextSecondary,
+            fontSize = 11.sp
+        )
+        if (nodeMode != NodeMode.TELEFONO) {
+            OutlinedTextField(
+                value = canal,
+                onValueChange = onCanalChange,
+                label = { Text("Canal MQTT", fontSize = 12.sp) },
+                modifier = Modifier.fillMaxWidth().testTag("mqtt_channel_input"),
+                singleLine = true,
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = accent,
+                    unfocusedBorderColor = DarkBorder,
+                    focusedLabelColor = accent,
+                    unfocusedLabelColor = TextMuted,
+                    focusedTextColor = TextPrimary,
+                    unfocusedTextColor = TextPrimary,
+                    focusedContainerColor = DarkSurface,
+                    unfocusedContainerColor = DarkSurface
+                )
+            )
+        }
     }
 }
 

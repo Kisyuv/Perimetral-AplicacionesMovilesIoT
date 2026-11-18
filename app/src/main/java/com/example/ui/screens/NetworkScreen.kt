@@ -25,8 +25,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Bluetooth
-import androidx.compose.material.icons.outlined.BluetoothConnected
 import androidx.compose.material.icons.outlined.CloudQueue
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Wifi
@@ -50,6 +48,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.network.ConnectionType
 import com.example.network.DiscoveredNode
+import com.example.network.Esp32Estado
+import com.example.network.NodeMode
+import com.example.ui.components.PermissionRequestState
+import com.example.ui.theme.DotoFamily
 import com.example.ui.theme.AccentAlarm
 import com.example.ui.theme.AccentArmed
 import com.example.ui.theme.AccentDisarmed
@@ -71,12 +73,11 @@ fun NetworkScreen(
     discoveredNodes: List<DiscoveredNode>,
     onConnectNode: (host: String, port: Int) -> Unit,
     onRefreshDiscovery: () -> Unit,
-    isBluetoothConnected: Boolean = false,
-    connectedBluetoothDevice: String? = null,
-    pairedBluetoothDevices: List<Pair<String, String>> = emptyList(),
-    onConnectBluetooth: (String) -> Unit = {},
-    onDisconnectBluetooth: () -> Unit = {},
-    onActivateBluetooth: () -> Unit = {},
+    wifiPermission: PermissionRequestState,
+    peerLinkReady: Boolean = false,
+    nodeMode: NodeMode = NodeMode.TELEFONO,
+    mqttChannel: String = "",
+    esp32: Esp32Estado = Esp32Estado(),
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -84,11 +85,13 @@ fun NetworkScreen(
     val scrollState = rememberScrollState()
 
     var isConnectedToWifi by remember { mutableStateOf(false) }
-    var currentSsid by remember { mutableStateOf("BODEGA-SEC-WIFI") }
+    var currentSsid by remember { mutableStateOf("—") }
     var localIpAddress by remember { mutableStateOf("127.0.0.1") }
+    // Se vuelve a leer el SSID cuando cambia el permiso de ubicación
+    val wifiPermissionGranted = wifiPermission.isGranted
 
     // Detección en tiempo real de conexión WiFi mediante NetworkCallback
-    DisposableEffect(context) {
+    DisposableEffect(context, wifiPermissionGranted) {
         val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
 
         fun updateWifiStatus() {
@@ -101,11 +104,15 @@ fun NetworkScreen(
                 try {
                     val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
                     val info = wifiManager?.connectionInfo
+                    @Suppress("DEPRECATION")
                     val ssid = info?.ssid
-                    if (!ssid.isNullOrEmpty() && ssid != "<unknown ssid>") {
-                        currentSsid = ssid.removeSurrounding("\"")
-                    } else {
-                        currentSsid = "BODEGA-SEC-WIFI"
+                    val locationManager = context.getSystemService(Context.LOCATION_SERVICE) as? android.location.LocationManager
+                    val locationOn = locationManager?.let { androidx.core.location.LocationManagerCompat.isLocationEnabled(it) } ?: false
+                    currentSsid = when {
+                        !ssid.isNullOrEmpty() && ssid != "<unknown ssid>" -> ssid.removeSurrounding("\"")
+                        !wifiPermission.isGranted -> "Sin permiso de ubicación"
+                        !locationOn -> "Activa la ubicación del teléfono"
+                        else -> "Oculto"
                     }
                 } catch (_: Exception) {}
             } else {
@@ -185,6 +192,7 @@ fun NetworkScreen(
                     text = "RED LOCAL WIFI",
                     color = TextPrimary,
                     fontSize = 22.sp,
+                    fontFamily = DotoFamily,
                     fontWeight = FontWeight.Bold,
                     letterSpacing = 1.sp
                 )
@@ -210,13 +218,11 @@ fun NetworkScreen(
         // Indicador de Canal de Conexión Activo
         val channelColor = when (connectionType) {
             ConnectionType.LOCAL_WIFI -> AccentDisarmed
-            ConnectionType.BLUETOOTH -> AccentArmed
             ConnectionType.CLOUD_BACKUP -> accent
         }
 
         val channelIcon = when (connectionType) {
             ConnectionType.LOCAL_WIFI -> Icons.Outlined.Wifi
-            ConnectionType.BLUETOOTH -> Icons.Outlined.BluetoothConnected
             ConnectionType.CLOUD_BACKUP -> Icons.Outlined.CloudQueue
         }
 
@@ -249,9 +255,6 @@ fun NetworkScreen(
                             fontSize = 14.sp,
                             fontWeight = FontWeight.SemiBold
                         )
-                        if (connectionType == ConnectionType.BLUETOOTH && connectedBluetoothDevice != null) {
-                            Text(text = "Vinculado a: $connectedBluetoothDevice", color = AccentArmed, fontSize = 11.sp)
-                        }
                     }
                 }
 
@@ -264,13 +267,37 @@ fun NetworkScreen(
             }
         }
 
+        if (nodeMode != NodeMode.TELEFONO) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(DarkSurface)
+                    .border(1.dp, if (esp32.nodoOnline) DarkBorder else TextSecondary, RoundedCornerShape(8.dp))
+                    .padding(16.dp)
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(text = "NODO ESP32 (MQTT)", color = accent, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+                    NetworkInfoRow("Modo", nodeMode.label)
+                    NetworkInfoRow("Canal", mqttChannel)
+                    NetworkInfoRow("Broker", if (esp32.broker) "Conectado" else "Sin conexión")
+                    NetworkInfoRow("ESP32", if (esp32.nodoOnline) "En línea" else "Fuera de línea")
+                    if (esp32.nodoOnline) {
+                        NetworkInfoRow("PIR", if (esp32.pir) "Movimiento" else "Sin movimiento")
+                        NetworkInfoRow("Puerta", if (esp32.puerta) "Abierta" else "Cerrada")
+                        esp32.rssi?.let { NetworkInfoRow("Señal WiFi", "$it dBm") }
+                    }
+                }
+            }
+        }
+
         // Estado del Adaptador de Red del Dispositivo
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(8.dp))
                 .background(DarkSurface)
-                .border(1.dp, if (isConnectedToWifi) DarkBorder else AccentAlarm, RoundedCornerShape(8.dp))
+                .border(1.dp, if (isConnectedToWifi) DarkBorder else TextSecondary, RoundedCornerShape(8.dp))
                 .padding(16.dp)
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -283,12 +310,12 @@ fun NetworkScreen(
                     Box(
                         modifier = Modifier
                             .clip(RoundedCornerShape(4.dp))
-                            .background(if (isConnectedToWifi) AccentDisarmed.copy(alpha = 0.15f) else AccentAlarm.copy(alpha = 0.15f))
+                            .background(if (isConnectedToWifi) AccentDisarmed.copy(alpha = 0.15f) else DarkSurfaceVariant)
                             .padding(horizontal = 6.dp, vertical = 2.dp)
                     ) {
                         Text(
                             text = if (isConnectedToWifi) "WIFI ACTIVO" else "SIN WIFI",
-                            color = if (isConnectedToWifi) AccentDisarmed else AccentAlarm,
+                            color = if (isConnectedToWifi) AccentDisarmed else TextPrimary,
                             fontSize = 9.sp,
                             fontWeight = FontWeight.Bold
                         )
@@ -297,210 +324,33 @@ fun NetworkScreen(
 
                 NetworkInfoRow("Estado WiFi:", if (isConnectedToWifi) "Conectado a WiFi" else "WiFi desconectado")
 
-                // Requerimiento: Al detectar que no hay conexión WiFi sale botón bajo el texto que dice "Activar bluetooth"
                 if (!isConnectedToWifi) {
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(DarkSurfaceVariant)
-                            .border(1.dp, AccentAlarm.copy(alpha = 0.4f), RoundedCornerShape(8.dp))
-                            .padding(12.dp)
-                    ) {
-                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    Icons.Outlined.WifiOff,
-                                    contentDescription = null,
-                                    tint = AccentAlarm,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    text = "No hay conexión WiFi disponible. Activa el enlace Bluetooth P2P para sincronización perimetral.",
-                                    color = TextSecondary,
-                                    fontSize = 11.sp,
-                                    lineHeight = 15.sp
-                                )
-                            }
-
-                            // Botón requerido textualmente "Activar bluetooth"
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .background(AccentArmed)
-                                    .clickable { onActivateBluetooth() }
-                                    .padding(vertical = 11.dp)
-                                    .testTag("activate_bluetooth_button"),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(
-                                        Icons.Outlined.Bluetooth,
-                                        contentDescription = null,
-                                        tint = DarkBackground,
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(
-                                        text = "Activar bluetooth",
-                                        color = DarkBackground,
-                                        fontSize = 13.sp,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                }
-                            }
-                        }
-                    }
-                    Spacer(modifier = Modifier.height(4.dp))
+                    MessageBox(
+                        "Sin WiFi: no hay enlace local con el nodo. Los comandos se envían por la nube (datos móviles) o quedan en cola hasta recuperar la conexión.",
+                        TextPrimary
+                    )
                 }
 
                 NetworkInfoRow("SSID detectado:", currentSsid)
+                if (!wifiPermission.isGranted || wifiPermission.message != null) {
+                    PermissionNotice(
+                        message = wifiPermission.message
+                            ?: "Para leer el nombre de la red WiFi (SSID) y buscar nodos locales, Android requiere el permiso de ubicación.",
+                        buttonText = "Conceder permiso de red WiFi",
+                        onClick = { wifiPermission.request() }
+                    )
+                }
                 NetworkInfoRow("Dirección IP local:", localIpAddress)
                 NetworkInfoRow("Puerto de enlace local:", "8765 (WebSocket)")
-                NetworkInfoRow("Cifrado de paquete:", "AES-GCM (256 bits Keystore)")
+                NetworkInfoRow("Cifrado de paquete:", "AES-GCM 256 (clave de enlace)")
             }
         }
 
-        // ENLACE BLUETOOTH P2P (Respaldo directo sin WiFi)
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(8.dp))
-                .background(DarkSurface)
-                .border(1.dp, if (isBluetoothConnected) AccentArmed else DarkBorder, RoundedCornerShape(8.dp))
-                .padding(16.dp)
-        ) {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(Icons.Outlined.Bluetooth, contentDescription = null, tint = AccentArmed, modifier = Modifier.size(20.dp))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Column {
-                            Text(text = "ENLACE BLUETOOTH P2P (SIN WIFI)", color = TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.8.sp)
-                            Text(text = "Comunicación bidireccional cifrada AES-GCM", color = TextMuted, fontSize = 11.sp)
-                        }
-                    }
-
-                    if (isBluetoothConnected) {
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(4.dp))
-                                .background(AccentArmed.copy(alpha = 0.15f))
-                                .padding(horizontal = 8.dp, vertical = 3.dp)
-                        ) {
-                            Text(text = "CONECTADO", color = AccentArmed, fontSize = 10.sp, fontWeight = FontWeight.Bold)
-                        }
-                    }
-                }
-
-                if (deviceRole == "nodo") {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(6.dp))
-                            .background(DarkSurfaceVariant)
-                            .padding(12.dp)
-                    ) {
-                        Text(
-                            text = "Servidor Bluetooth RFCOMM activo en este nodo esperando vinculación directa del panel perimetral para operación autónoma offline.",
-                            color = TextSecondary,
-                            fontSize = 11.sp,
-                            lineHeight = 16.sp
-                        )
-                    }
-                } else {
-                    // Vista Panel
-                    if (isBluetoothConnected) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(DarkSurfaceVariant)
-                                .padding(12.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column {
-                                Text(text = "Dispositivo enlazado:", color = TextMuted, fontSize = 11.sp)
-                                Text(text = connectedBluetoothDevice ?: "Nodo Bodega Central (P2P)", color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                            }
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(4.dp))
-                                    .background(DarkSurface)
-                                    .border(1.dp, AccentAlarm, RoundedCornerShape(4.dp))
-                                    .clickable { onDisconnectBluetooth() }
-                                    .padding(horizontal = 10.dp, vertical = 6.dp)
-                            ) {
-                                Text(text = "Desconectar", color = AccentAlarm, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                            }
-                        }
-                    } else {
-                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            // Botón directo para activar enlace Bluetooth
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .background(AccentArmed)
-                                    .clickable { onActivateBluetooth() }
-                                    .padding(vertical = 10.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(
-                                        Icons.Outlined.Bluetooth,
-                                        contentDescription = null,
-                                        tint = DarkBackground,
-                                        modifier = Modifier.size(16.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(
-                                        text = "Activar bluetooth",
-                                        color = DarkBackground,
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                }
-                            }
-
-                            Text(text = "Dispositivos Bluetooth detectados para enlace:", color = TextSecondary, fontSize = 11.sp)
-                            pairedBluetoothDevices.forEach { (name, address) ->
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .clip(RoundedCornerShape(6.dp))
-                                        .background(DarkSurfaceVariant)
-                                        .padding(10.dp),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(text = name, color = TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.Medium)
-                                        Text(text = address, color = TextMuted, fontSize = 10.sp)
-                                    }
-                                    Box(
-                                        modifier = Modifier
-                                            .clip(RoundedCornerShape(4.dp))
-                                            .background(AccentArmed)
-                                            .clickable { onConnectBluetooth(address) }
-                                            .padding(horizontal = 10.dp, vertical = 5.dp)
-                                    ) {
-                                        Text(text = "Enlazar", color = DarkBackground, fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+        if (!peerLinkReady) {
+            MessageBox(
+                "Clave de enlace no sincronizada: abre la app con internet una vez en cada dispositivo para poder enlazarlos por la WiFi local.",
+                TextMuted
+            )
         }
 
         // Descubrimiento mDNS de Nodos en la Red (_perimetral._tcp)
@@ -550,7 +400,7 @@ fun NetworkScreen(
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
-                                text = "Buscando nodos en la red WiFi local... Los comandos se sincronizan por Bluetooth P2P o la nube si el nodo no está en la misma red.",
+                                text = "Buscando nodos en la red WiFi local... Si el nodo no está en la misma red, los comandos se sincronizan por la nube.",
                                 color = TextMuted,
                                 fontSize = 11.sp,
                                 textAlign = androidx.compose.ui.text.style.TextAlign.Center,
@@ -602,5 +452,46 @@ private fun NetworkInfoRow(label: String, value: String) {
     ) {
         Text(text = label, color = TextMuted, fontSize = 12.sp)
         Text(text = value, color = TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+    }
+}
+
+@Composable
+private fun MessageBox(text: String, color: androidx.compose.ui.graphics.Color) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(6.dp))
+            .background(DarkSurfaceVariant)
+            .border(1.dp, color.copy(alpha = 0.4f), RoundedCornerShape(6.dp))
+            .padding(12.dp)
+    ) {
+        Text(text = text, color = if (color == TextMuted) TextSecondary else color, fontSize = 11.sp, lineHeight = 16.sp)
+    }
+}
+
+@Composable
+private fun ActionButton(text: String, icon: androidx.compose.ui.graphics.vector.ImageVector, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(6.dp))
+            .background(AccentArmed)
+            .clickable(onClick = onClick)
+            .padding(vertical = 10.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Icon(icon, contentDescription = null, tint = DarkBackground, modifier = Modifier.size(16.dp))
+            Spacer(modifier = Modifier.width(6.dp))
+            Text(text = text, color = DarkBackground, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+        }
+    }
+}
+
+@Composable
+private fun PermissionNotice(message: String, buttonText: String, onClick: () -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        MessageBox(message, TextPrimary)
+        ActionButton(text = buttonText, icon = Icons.Outlined.Wifi, onClick = onClick)
     }
 }

@@ -4,7 +4,11 @@ import com.example.data.model.SecurityEvent
 import com.example.data.model.SiteAlarmState
 import com.example.data.model.SiteCameraConfig
 import com.example.data.model.SiteSensorState
+import com.example.domain.model.PerimeterZones
 import com.example.security.PinSecurity
+import android.util.Log
+import com.google.android.gms.tasks.Task
+import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.Query
@@ -14,13 +18,35 @@ import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.callbackFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 import java.util.Calendar
 
+@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class SiteAlarmRepository(
-    private val firestore: FirebaseFirestore
+    private val firestore: FirebaseFirestore,
+    private val auth: FirebaseAuth
 ) {
+
+    /**
+     * uid de la sesión actual. Las escuchas se crean (y se recrean) solo con sesión iniciada:
+     * una escucha abierta sin sesión recibe PERMISSION_DENIED y Firestore no la reintenta nunca.
+     */
+    private val sessionUid: Flow<String?> = callbackFlow {
+        val listener = FirebaseAuth.AuthStateListener { trySend(it.currentUser?.uid) }
+        auth.addAuthStateListener(listener)
+        awaitClose { auth.removeAuthStateListener(listener) }
+    }.distinctUntilChanged()
+
+    private fun <T> whenSignedIn(signedOut: T, block: () -> Flow<T>): Flow<T> =
+        sessionUid.flatMapLatest { uid -> if (uid == null) flowOf(signedOut) else block() }
+
+    private fun <T> Task<T>.logFailure(what: String): Task<T> = addOnFailureListener { e ->
+        Log.w("SiteAlarmRepository", "Escritura rechazada ($what): ${e.message}")
+    }
 
     private val repoScope = CoroutineScope(Dispatchers.IO)
     private val _localSiteState = kotlinx.coroutines.flow.MutableStateFlow(SiteAlarmState())
@@ -40,7 +66,7 @@ class SiteAlarmRepository(
                     "estroboActivo" to false,
                     "ultimaActualizacion" to FieldValue.serverTimestamp()
                 )
-                firestore.collection("sitios").document(siteId).set(initialSite).await()
+                firestore.collection("sitios").document(siteId).set(initialSite).logFailure("set")
             }
 
             // Inicializar documento de sensores si no existe, o resetear estado si ya existe
@@ -56,7 +82,7 @@ class SiteAlarmRepository(
                             "ultimoPir" to 0L,
                             "ultimoReed" to 0L
                         )
-                    ).await()
+                    ).logFailure("update")
             } else {
                 firestore.collection("sitios").document(siteId)
                     .collection("sensores").document("estado")
@@ -65,7 +91,7 @@ class SiteAlarmRepository(
                             "pirMovimiento" to false,
                             "reedPuertaAbierta" to false
                         )
-                    ).await()
+                    ).logFailure("update")
             }
 
             // Inicializar documento de configuración de cámara si no existe
@@ -82,104 +108,116 @@ class SiteAlarmRepository(
                             "estadoCamara" to "inactiva",
                             "ultimoMovimientoDetectado" to 0L
                         )
-                    ).await()
+                    ).logFailure("update")
             }
         } catch (_: Exception) {}
     }
 
-    fun observeSiteState(siteId: String = "bodega_central"): Flow<SiteAlarmState> = callbackFlow {
-        trySend(_localSiteState.value)
-        val docRef = firestore.collection("sitios").document(siteId)
-        val registration = docRef.addSnapshotListener { snapshot, error ->
-            if (error != null || snapshot == null || !snapshot.exists()) {
-                trySend(_localSiteState.value)
-                return@addSnapshotListener
+    fun observeSiteState(siteId: String = "bodega_central"): Flow<SiteAlarmState> = whenSignedIn(_localSiteState.value) {
+        callbackFlow {
+            trySend(_localSiteState.value)
+            val docRef = firestore.collection("sitios").document(siteId)
+            val registration = docRef.addSnapshotListener { snapshot, error ->
+                if (error != null || snapshot == null || !snapshot.exists()) {
+                    trySend(_localSiteState.value)
+                    return@addSnapshotListener
+                }
+                val state = snapshot.toObject(SiteAlarmState::class.java) ?: SiteAlarmState()
+                _localSiteState.value = state
+                trySend(state)
             }
-            val state = snapshot.toObject(SiteAlarmState::class.java) ?: SiteAlarmState()
-            _localSiteState.value = state
-            trySend(state)
+            awaitClose { registration.remove() }
         }
-        awaitClose { registration.remove() }
     }
 
-    fun observeSensorState(siteId: String = "bodega_central"): Flow<SiteSensorState> = callbackFlow {
-        val docRef = firestore.collection("sitios").document(siteId)
-            .collection("sensores").document("estado")
-        val registration = docRef.addSnapshotListener { snapshot, error ->
-            if (error != null || snapshot == null || !snapshot.exists()) {
-                trySend(SiteSensorState())
-                return@addSnapshotListener
+    fun observeSensorState(siteId: String = "bodega_central"): Flow<SiteSensorState> = whenSignedIn(SiteSensorState()) {
+        callbackFlow {
+            val docRef = firestore.collection("sitios").document(siteId)
+                .collection("sensores").document("estado")
+            val registration = docRef.addSnapshotListener { snapshot, error ->
+                if (error != null || snapshot == null || !snapshot.exists()) {
+                    trySend(SiteSensorState())
+                    return@addSnapshotListener
+                }
+                val state = snapshot.toObject(SiteSensorState::class.java) ?: SiteSensorState()
+                trySend(state)
             }
-            val state = snapshot.toObject(SiteSensorState::class.java) ?: SiteSensorState()
-            trySend(state)
+            awaitClose { registration.remove() }
         }
-        awaitClose { registration.remove() }
     }
 
-    fun observeCameraConfig(siteId: String = "bodega_central"): Flow<SiteCameraConfig> = callbackFlow {
-        val docRef = firestore.collection("sitios").document(siteId)
-            .collection("config").document("general")
-        val registration = docRef.addSnapshotListener { snapshot, error ->
-            if (error != null || snapshot == null || !snapshot.exists()) {
-                trySend(SiteCameraConfig())
-                return@addSnapshotListener
+    fun observeCameraConfig(siteId: String = "bodega_central"): Flow<SiteCameraConfig> = whenSignedIn(SiteCameraConfig()) {
+        callbackFlow {
+            val docRef = firestore.collection("sitios").document(siteId)
+                .collection("config").document("general")
+            val registration = docRef.addSnapshotListener { snapshot, error ->
+                if (error != null || snapshot == null || !snapshot.exists()) {
+                    trySend(SiteCameraConfig())
+                    return@addSnapshotListener
+                }
+                val config = snapshot.toObject(SiteCameraConfig::class.java) ?: SiteCameraConfig()
+                trySend(config)
             }
-            val config = snapshot.toObject(SiteCameraConfig::class.java) ?: SiteCameraConfig()
-            trySend(config)
+            awaitClose { registration.remove() }
         }
-        awaitClose { registration.remove() }
     }
 
-    fun observeEvents(siteId: String = "bodega_central", limitCount: Long = 30): Flow<List<SecurityEvent>> = callbackFlow {
-        val query = firestore.collection("sitios").document(siteId)
-            .collection("eventos")
-            .orderBy("timestamp", Query.Direction.DESCENDING)
-            .limit(limitCount)
+    fun observeEvents(siteId: String = "bodega_central", limitCount: Long = 30): Flow<List<SecurityEvent>> = whenSignedIn(emptyList()) {
+        callbackFlow {
+            val query = firestore.collection("sitios").document(siteId)
+                .collection("eventos")
+                .orderBy("timestamp", Query.Direction.DESCENDING)
+                .limit(limitCount)
 
-        val registration = query.addSnapshotListener { snapshot, error ->
-            if (error != null || snapshot == null) {
-                trySend(emptyList())
-                return@addSnapshotListener
+            val registration = query.addSnapshotListener { snapshot, error ->
+                if (error != null || snapshot == null) {
+                    trySend(emptyList())
+                    return@addSnapshotListener
+                }
+                val events = snapshot.documents.mapNotNull { doc ->
+                    val id = doc.id
+                    val tipo = doc.getString("tipo") ?: ""
+                    val detalle = doc.getString("detalle") ?: ""
+                    val origen = doc.getString("origen") ?: ""
+                    val ts = doc.getLong("timestamp") ?: System.currentTimeMillis()
+                    SecurityEvent(id = id, tipo = tipo, detalle = detalle, origen = origen, timestamp = ts)
+                }
+                trySend(events)
             }
-            val events = snapshot.documents.mapNotNull { doc ->
-                val id = doc.id
-                val tipo = doc.getString("tipo") ?: ""
-                val detalle = doc.getString("detalle") ?: ""
-                val origen = doc.getString("origen") ?: ""
-                val ts = doc.getLong("timestamp") ?: System.currentTimeMillis()
-                SecurityEvent(id = id, tipo = tipo, detalle = detalle, origen = origen, timestamp = ts)
-            }
-            trySend(events)
+            awaitClose { registration.remove() }
         }
-        awaitClose { registration.remove() }
     }
 
-    suspend fun armSystem(siteId: String = "bodega_central", origen: String = "panel"): Result<Unit> {
+    suspend fun armSystem(siteId: String = "bodega_central", origen: String = "panel", eventId: String? = null): Result<Unit> {
         _localSiteState.value = _localSiteState.value.copy(
             estado = "armada",
             sirenaActiva = false,
-            estroboActivo = false
+            estroboActivo = false,
+            zonaAlarma = ""
         )
+        val activeZones = _localSiteState.value.zonasActivas.size
         return try {
             firestore.collection("sitios").document(siteId).set(
                 mapOf(
                     "estado" to "armada",
                     "sirenaActiva" to false,
                     "estroboActivo" to false,
+                    "zonaAlarma" to "",
                     "ultimaActualizacion" to FieldValue.serverTimestamp()
                 ),
                 com.google.firebase.firestore.SetOptions.merge()
-            ).await()
+            ).logFailure("armar sitio")
 
             resetSensors(siteId)
-            logEvent(siteId, "armado", "Sistema armado por operador", origen)
+            val zonesNote = if (activeZones == 0) " (sin zonas activas: ningún sensor disparará la alarma)" else " ($activeZones zonas activas)"
+            logEvent(siteId, "armado", "Sistema armado por operador$zonesNote", origen, eventId)
             Result.success(Unit)
         } catch (e: Exception) {
             Result.failure(e)
         }
     }
 
-    suspend fun disarmSystem(siteId: String = "bodega_central", pinInput: String, origen: String = "panel"): Result<Unit> {
+    suspend fun disarmSystem(siteId: String = "bodega_central", pinInput: String, origen: String = "panel", eventId: String? = null): Result<Unit> {
         return try {
             val siteDoc = firestore.collection("sitios").document(siteId).get().await()
             val pinHash = siteDoc.getString("pinHash") ?: ""
@@ -192,7 +230,8 @@ class SiteAlarmRepository(
             _localSiteState.value = _localSiteState.value.copy(
                 estado = "desarmada",
                 sirenaActiva = false,
-                estroboActivo = false
+                estroboActivo = false,
+                zonaAlarma = ""
             )
 
             firestore.collection("sitios").document(siteId).set(
@@ -200,13 +239,14 @@ class SiteAlarmRepository(
                     "estado" to "desarmada",
                     "sirenaActiva" to false,
                     "estroboActivo" to false,
+                    "zonaAlarma" to "",
                     "ultimaActualizacion" to FieldValue.serverTimestamp()
                 ),
                 com.google.firebase.firestore.SetOptions.merge()
-            ).await()
+            ).logFailure("desarmar sitio")
 
             resetSensors(siteId)
-            logEvent(siteId, "desarmado", "Sistema desarmado mediante PIN autorizado", origen)
+            logEvent(siteId, "desarmado", "Sistema desarmado mediante PIN autorizado", origen, eventId)
             Result.success(Unit)
         } catch (e: Exception) {
             Result.failure(e)
@@ -217,7 +257,8 @@ class SiteAlarmRepository(
         siteId: String = "bodega_central",
         pinInput: String,
         silenceSiren: Boolean,
-        turnOffStrobe: Boolean
+        turnOffStrobe: Boolean,
+        eventId: String? = null
     ): Result<Unit> {
         return try {
             val siteDoc = firestore.collection("sitios").document(siteId).get().await()
@@ -234,8 +275,8 @@ class SiteAlarmRepository(
             if (silenceSiren) updates["sirenaActiva"] = false
             if (turnOffStrobe) updates["estroboActivo"] = false
 
-            firestore.collection("sitios").document(siteId).update(updates).await()
-            logEvent(siteId, "alarma", "Actuadores silenciados manualmente con PIN", "panel")
+            firestore.collection("sitios").document(siteId).update(updates).logFailure("silenciar actuadores")
+            logEvent(siteId, "alarma", "Actuadores silenciados manualmente con PIN", "panel", eventId)
             Result.success(Unit)
         } catch (e: Exception) {
             Result.failure(e)
@@ -246,12 +287,20 @@ class SiteAlarmRepository(
         siteId: String = "bodega_central",
         sensorType: String, // "pir" | "reed"
         detail: String,
-        origen: String = "nodo"
+        origen: String = "nodo",
+        eventId: String? = null,
+        zoneId: String? = null
     ) {
         try {
             val now = System.currentTimeMillis()
             val siteDoc = firestore.collection("sitios").document(siteId).get().await()
             val estadoActual = siteDoc.getString("estado") ?: "desarmada"
+            @Suppress("UNCHECKED_CAST")
+            val activeZones = siteDoc.get("zonasActivas") as? List<String> ?: emptyList()
+            val zone = zoneId?.let { id -> PerimeterZones.DEFAULTS.firstOrNull { it.id == id } }
+                ?: PerimeterZones.zoneForSensor(sensorType)
+            val zoneLabel = zone?.let { PerimeterZones.label(it) } ?: "zona sin asignar"
+            val zoneActive = zone != null && zone.id in activeZones
 
             // Actualizar telemetría de sensores
             val sensorUpdates = mutableMapOf<String, Any>()
@@ -262,25 +311,30 @@ class SiteAlarmRepository(
                 sensorUpdates["reedPuertaAbierta"] = true
                 sensorUpdates["ultimoReed"] = now
             }
-            firestore.collection("sitios").document(siteId)
-                .collection("sensores").document("estado")
-                .update(sensorUpdates).await()
+            if (sensorUpdates.isNotEmpty()) {
+                firestore.collection("sitios").document(siteId)
+                    .collection("sensores").document("estado")
+                    .update(sensorUpdates).logFailure("telemetría de sensor")
+            }
 
-            // Si está armada, disparar alarma y encender actuadores
-            if (estadoActual.equals("armada", ignoreCase = true)) {
+            // Solo dispara si está armada y el sensor pertenece a una zona activa
+            if (estadoActual.equals("armada", ignoreCase = true) && zoneActive) {
                 firestore.collection("sitios").document(siteId).update(
                     mapOf(
                         "estado" to "alarma",
                         "sirenaActiva" to true,
                         "estroboActivo" to true,
+                        "zonaAlarma" to zoneLabel,
                         "ultimaActualizacion" to FieldValue.serverTimestamp()
                     )
-                ).await()
+                ).logFailure("disparo de alarma")
 
-                logEvent(siteId, "alarma", "¡INTRUSIÓN! Activación de sensor: $detail", origen)
+                logEvent(siteId, "alarma", "¡INTRUSIÓN en $zoneLabel! $detail", origen, eventId)
+            } else if (estadoActual.equals("armada", ignoreCase = true)) {
+                logEvent(siteId, sensorType, "$detail — $zoneLabel desactivada, no se dispara la alarma", origen, eventId)
             } else {
                 // Si está desarmada, solo registrar el evento sin disparar alarma
-                logEvent(siteId, sensorType, detail, origen)
+                logEvent(siteId, sensorType, "$detail ($zoneLabel)", origen, eventId)
             }
 
             // Auto-restablecer el pulso del sensor a inactivo después de 4 segundos
@@ -289,6 +343,16 @@ class SiteAlarmRepository(
                 resetSensorStatus(siteId, resetPir = (sensorType == "pir"), resetReed = (sensorType == "reed"))
             }
         } catch (_: Exception) {}
+    }
+
+    /** Simulación de una zona concreta; ZN-05 y ZN-01 además encienden su indicador de sensor. */
+    suspend fun simulateZoneTrigger(siteId: String = "bodega_central", zoneId: String, origen: String, eventId: String? = null) {
+        val sensorType = when (zoneId) {
+            "ZN-05" -> "pir"
+            "ZN-01" -> "reed"
+            else -> "zona"
+        }
+        recordSensorTrigger(siteId, sensorType, "Activación simulada por operador", origen, eventId, zoneId)
     }
 
     suspend fun resetSensors(siteId: String = "bodega_central") {
@@ -302,7 +366,7 @@ class SiteAlarmRepository(
             if (resetReed) updates["reedPuertaAbierta"] = false
             firestore.collection("sitios").document(siteId)
                 .collection("sensores").document("estado")
-                .update(updates).await()
+                .update(updates).logFailure("update")
         } catch (_: Exception) {}
     }
 
@@ -328,7 +392,7 @@ class SiteAlarmRepository(
                     "ultimaActualizacion" to FieldValue.serverTimestamp()
                 ),
                 com.google.firebase.firestore.SetOptions.merge()
-            ).await()
+            ).logFailure("horario")
             logEvent(siteId, "armado", "Horario actualizado: $inicio a $fin (Auto-armado: $armadoAutomatico)", "panel")
             Result.success(Unit)
         } catch (e: Exception) {
@@ -351,7 +415,7 @@ class SiteAlarmRepository(
                         "sensibilidad" to sensibilidad,
                         "tiempoConfirmacion" to tiempoConfirmacion
                     )
-                ).await()
+                ).logFailure("update")
             logEvent(siteId, "config", "Modo sensor movimiento cambiado a: $modoPir (Sensibilidad: $sensibilidad)", "panel")
             Result.success(Unit)
         } catch (e: Exception) {
@@ -363,11 +427,15 @@ class SiteAlarmRepository(
         try {
             firestore.collection("sitios").document(siteId)
                 .collection("config").document("general")
-                .update(mapOf("estadoCamara" to estadoCamara)).await()
+                .update(mapOf("estadoCamara" to estadoCamara)).logFailure("update")
         } catch (_: Exception) {}
     }
 
-    suspend fun logEvent(siteId: String = "bodega_central", tipo: String, detalle: String, origen: String) {
+    /**
+     * Con eventId (el id del comando) el mismo evento escrito por panel y nodo queda en un único
+     * documento, aunque el comando llegue por la nube y por el enlace local.
+     */
+    suspend fun logEvent(siteId: String = "bodega_central", tipo: String, detalle: String, origen: String, eventId: String? = null) {
         try {
             val eventPayload = mapOf(
                 "tipo" to tipo,
@@ -375,11 +443,43 @@ class SiteAlarmRepository(
                 "origen" to origen,
                 "timestamp" to System.currentTimeMillis()
             )
-            firestore.collection("sitios").document(siteId)
-                .collection("eventos")
-                .add(eventPayload)
-                .await()
+            val eventos = firestore.collection("sitios").document(siteId).collection("eventos")
+            if (eventId != null) {
+                eventos.document(eventId).set(eventPayload).logFailure("evento $tipo")
+            } else {
+                eventos.add(eventPayload).logFailure("evento $tipo")
+            }
         } catch (_: Exception) {}
+    }
+
+    fun setZoneActive(siteId: String = "bodega_central", zoneId: String, active: Boolean, origen: String, eventId: String? = null) {
+        val current = _localSiteState.value.zonasActivas
+        _localSiteState.value = _localSiteState.value.copy(
+            zonasActivas = if (active) (current + zoneId).distinct() else current - zoneId
+        )
+        firestore.collection("sitios").document(siteId).update(
+            "zonasActivas",
+            if (active) FieldValue.arrayUnion(zoneId) else FieldValue.arrayRemove(zoneId)
+        ).logFailure("zona $zoneId")
+        val label = PerimeterZones.DEFAULTS.firstOrNull { it.id == zoneId }?.let { PerimeterZones.label(it) } ?: zoneId
+        repoScope.launch {
+            logEvent(siteId, "config", if (active) "Zona activada: $label" else "Zona desactivada: $label", origen, eventId)
+        }
+    }
+
+    fun setAllZonesActive(siteId: String = "bodega_central", active: Boolean, origen: String, eventId: String? = null) {
+        val ids = if (active) PerimeterZones.DEFAULTS.map { it.id } else emptyList()
+        _localSiteState.value = _localSiteState.value.copy(zonasActivas = ids)
+        firestore.collection("sitios").document(siteId).update("zonasActivas", ids).logFailure("todas las zonas")
+        repoScope.launch {
+            logEvent(siteId, "config", if (active) "Todas las zonas activadas" else "Todas las zonas desactivadas", origen, eventId)
+        }
+    }
+
+    fun updateCameraLens(siteId: String = "bodega_central", lente: String) {
+        firestore.collection("sitios").document(siteId)
+            .collection("config").document("general")
+            .update(mapOf("lente" to lente)).logFailure("update")
     }
 
     fun isOffHours(inicio: String, fin: String, dias: List<Long>): Boolean {

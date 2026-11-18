@@ -20,7 +20,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.ui.theme.DarkBorder
 import com.example.ui.theme.DarkSurface
-import com.example.ui.theme.LocalAlarmAccentColor
+import com.example.ui.theme.AccentAlarm
+import com.example.ui.theme.DotoFamily
+import com.example.ui.theme.TextPrimary
+import com.example.ui.theme.TextSecondary
+import androidx.compose.ui.text.font.FontWeight
 import com.example.ui.theme.SystemAlarmState
 
 @Composable
@@ -28,28 +32,30 @@ fun StatusIndicator(
     systemState: SystemAlarmState,
     modifier: Modifier = Modifier
 ) {
-    val accentColor = LocalAlarmAccentColor.current
+    // Estado en texto + punto: ARMADA = punto lleno, DESARMADA = punto hueco, ALARMA = punto rojo
+    val accentColor = if (systemState == SystemAlarmState.ALARM) AccentAlarm else TextPrimary
+    val dotModifier = Modifier.size(8.dp).clip(CircleShape)
 
     Row(
         modifier = modifier
-            .clip(RoundedCornerShape(4.dp))
+            .clip(RoundedCornerShape(6.dp))
             .background(DarkSurface)
-            .border(1.dp, DarkBorder, RoundedCornerShape(4.dp))
+            .border(1.dp, DarkBorder, RoundedCornerShape(6.dp))
             .padding(horizontal = 10.dp, vertical = 6.dp)
             .testTag("status_indicator_badge"),
         verticalAlignment = Alignment.CenterVertically
     ) {
         Box(
-            modifier = Modifier
-                .size(8.dp)
-                .clip(CircleShape)
-                .background(accentColor)
+            modifier = if (systemState == SystemAlarmState.DISARMED) dotModifier.border(1.dp, TextSecondary, CircleShape)
+            else dotModifier.background(accentColor)
         )
         Spacer(modifier = Modifier.width(8.dp))
         Text(
             text = systemState.label,
             color = accentColor,
-            fontSize = 11.sp,
+            fontFamily = DotoFamily,
+            fontWeight = FontWeight.Bold,
+            fontSize = 12.sp,
             letterSpacing = 1.2.sp
         )
     }

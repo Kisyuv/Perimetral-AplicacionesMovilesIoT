@@ -110,4 +110,56 @@ class KeystoreManager(private val context: Context) {
             null
         }
     }
+
+    /**
+     * Clave AES-256 compartida entre panel y nodo de la misma cuenta.
+     * La clave maestra del Keystore es única por dispositivo (no exportable), así que no sirve
+     * para que otro equipo descifre; esta clave se distribuye vía Firestore y se guarda cifrada
+     * localmente para funcionar sin conexión.
+     */
+    @Volatile
+    private var peerKey: SecretKey? = null
+
+    fun hasPeerKey(): Boolean = peerKey != null
+
+    fun setPeerKey(rawBase64: String) {
+        val bytes = Base64.getDecoder().decode(rawBase64)
+        peerKey = javax.crypto.spec.SecretKeySpec(bytes, "AES")
+        saveSecureSecret(PEER_KEY_PREF, rawBase64)
+    }
+
+    fun loadCachedPeerKey(): Boolean {
+        val cached = getSecureSecret(PEER_KEY_PREF) ?: return false
+        peerKey = javax.crypto.spec.SecretKeySpec(Base64.getDecoder().decode(cached), "AES")
+        return true
+    }
+
+    fun generatePeerKeyBase64(): String {
+        val bytes = ByteArray(32)
+        java.security.SecureRandom().nextBytes(bytes)
+        return Base64.getEncoder().encodeToString(bytes)
+    }
+
+    fun encryptForPeer(plainText: String): String {
+        val key = peerKey ?: throw SecurityException("Clave de enlace no disponible")
+        val cipher = Cipher.getInstance(TRANSFORMATION)
+        cipher.init(Cipher.ENCRYPT_MODE, key)
+        val iv = cipher.iv
+        val cipherText = cipher.doFinal(plainText.toByteArray(Charsets.UTF_8))
+        return Base64.getEncoder().encodeToString(iv + cipherText)
+    }
+
+    fun decryptFromPeer(encryptedBase64: String): String {
+        val key = peerKey ?: throw SecurityException("Clave de enlace no disponible")
+        val combined = Base64.getDecoder().decode(encryptedBase64)
+        if (combined.size < GCM_IV_LENGTH) {
+            throw SecurityException("Cifrado corrupto o tamaño de IV inválido.")
+        }
+        val cipher = Cipher.getInstance(TRANSFORMATION)
+        cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(GCM_TAG_LENGTH, combined, 0, GCM_IV_LENGTH))
+        val plain = cipher.doFinal(combined, GCM_IV_LENGTH, combined.size - GCM_IV_LENGTH)
+        return String(plain, Charsets.UTF_8)
+    }
 }
+
+private const val PEER_KEY_PREF = "peer_link_key"

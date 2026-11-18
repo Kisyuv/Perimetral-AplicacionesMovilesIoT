@@ -122,6 +122,8 @@ dependencies {
   implementation(libs.logging.interceptor)
   implementation(libs.moshi.kotlin)
   implementation(libs.okhttp)
+  // Cliente MQTT Java puro (sin el servicio Android de Paho) para el nodo ESP32
+  implementation(libs.paho.mqtt)
   // implementation(libs.play.services.location)
   implementation(libs.retrofit)
   testImplementation(libs.androidx.compose.ui.test.junit4)

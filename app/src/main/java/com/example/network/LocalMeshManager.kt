@@ -27,13 +27,11 @@ import java.util.concurrent.TimeUnit
 
 enum class ConnectionType(val label: String) {
     LOCAL_WIFI("Red local (WiFi Bodega)"),
-    BLUETOOTH("Enlace Bluetooth P2P"),
     CLOUD_BACKUP("Nube (Firebase Backup)")
 }
 
 class LocalMeshManager(
-    private val keystoreManager: KeystoreManager,
-    var bluetoothSyncManager: BluetoothSyncManager? = null
+    private val keystoreManager: KeystoreManager
 ) {
 
     private val scope = CoroutineScope(Dispatchers.IO)
@@ -52,13 +50,52 @@ class LocalMeshManager(
     private val _lastReceivedLocalCommand = MutableStateFlow<String?>(null)
     val lastReceivedLocalCommand: StateFlow<String?> = _lastReceivedLocalCommand.asStateFlow()
 
-    var onLocalCommandReceived: ((action: String, pin: String?, detail: String?) -> Unit)? = null
+    var onLocalCommandReceived: ((action: String, pin: String?, detail: String?, commandId: String?) -> Unit)? = null
 
-    init {
-        // Enlazar eventos recibidos por Bluetooth si no hay WiFi
-        bluetoothSyncManager?.onCommandReceived = { action, pin, detail ->
-            _lastReceivedLocalCommand.value = "$action [AES-GCM BT OK]"
-            onLocalCommandReceived?.invoke(action, pin, detail)
+    /** Panel: ACK o error recibido del nodo por WiFi local. */
+    var onPeerMessage: ((JSONObject) -> Unit)? = null
+
+    /** Panel: último estado empujado por el nodo; null si no hay enlace local. */
+    private val _peerState = MutableStateFlow<JSONObject?>(null)
+    val peerState: StateFlow<JSONObject?> = _peerState.asStateFlow()
+
+    fun clearPeerState() {
+        _peerState.value = null
+    }
+
+    private fun dispatchPeerMessage(json: JSONObject) {
+        if (json.optString("type") == "state") {
+            _peerState.value = json
+        } else {
+            onPeerMessage?.invoke(json)
+        }
+    }
+
+    /** Panel: hay un canal directo con el nodo (WebSocket abierto en la WiFi local). */
+    fun hasLocalLink(): Boolean =
+        clientWebSocket != null && _connectionType.value == ConnectionType.LOCAL_WIFI
+
+    // Nodo: paneles conectados por WebSocket, para empujarles el estado
+    private val wsClients = java.util.concurrent.CopyOnWriteArrayList<OutputStream>()
+    private var lastState: JSONObject? = null
+
+
+    /** Nodo: envía el estado actual a los paneles enlazados por WebSocket. */
+    fun broadcastState(state: JSONObject) {
+        lastState = state
+        val encrypted = try {
+            keystoreManager.encryptForPeer(state.toString())
+        } catch (_: Exception) {
+            null
+        }
+        if (encrypted != null) {
+            wsClients.forEach { out ->
+                try {
+                    synchronized(out) { sendWebSocketFrame(out, encrypted) }
+                } catch (_: Exception) {
+                    wsClients.remove(out)
+                }
+            }
         }
     }
 
@@ -107,8 +144,20 @@ class LocalMeshManager(
                 output.write(response.toByteArray(Charsets.UTF_8))
                 output.flush()
 
-                // 2. Leer frames de WebSocket
-                readWebSocketFrames(input, output)
+                // 2. Registrar el panel y enviarle el último estado conocido
+                wsClients.add(output)
+                lastState?.let { state ->
+                    try {
+                        synchronized(output) { sendWebSocketFrame(output, keystoreManager.encryptForPeer(state.toString())) }
+                    } catch (_: Exception) {}
+                }
+
+                // 3. Leer frames de WebSocket
+                try {
+                    readWebSocketFrames(input, output)
+                } finally {
+                    wsClients.remove(output)
+                }
             }
         } catch (_: Exception) {
         } finally {
@@ -166,21 +215,25 @@ class LocalMeshManager(
 
             // Descifrar mensaje con AES-GCM (rechaza si viene de dispositivo no vinculado)
             try {
-                val decryptedJson = keystoreManager.decrypt(encryptedPayload)
+                val decryptedJson = keystoreManager.decryptFromPeer(encryptedPayload)
                 val json = JSONObject(decryptedJson)
                 val action = json.optString("action")
                 val pin = json.optString("pin", null)
                 val detail = json.optString("detail", null)
+                val commandId = json.optString("id", null)
 
                 _lastReceivedLocalCommand.value = "$action [AES-GCM OK]"
-                onLocalCommandReceived?.invoke(action, pin, detail)
+                onLocalCommandReceived?.invoke(action, pin, detail, commandId)
 
                 // Enviar respuesta cifrada ACK
-                val ackJson = JSONObject().put("status", "ok").put("action", action).toString()
-                val encryptedAck = keystoreManager.encrypt(ackJson)
-                sendWebSocketFrame(output, encryptedAck)
+                val ackJson = JSONObject().put("type", "ack").put("status", "ok").put("action", action).put("id", commandId).toString()
+                val encryptedAck = keystoreManager.encryptForPeer(ackJson)
+                synchronized(output) { sendWebSocketFrame(output, encryptedAck) }
             } catch (e: Exception) {
                 Log.w("LocalMesh", "Mensaje rechazado: fallo de autenticación GCM (Dispositivo no vinculado)")
+                try {
+                    synchronized(output) { sendWebSocketFrame(output, "ERR:clave") }
+                } catch (_: Exception) {}
             }
         }
     }
@@ -221,50 +274,48 @@ class LocalMeshManager(
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
+                if (text.startsWith("ERR:")) {
+                    onPeerMessage?.invoke(JSONObject().put("type", "error").put("reason", text.removePrefix("ERR:")))
+                    return
+                }
                 try {
-                    val decrypted = keystoreManager.decrypt(text)
+                    val decrypted = keystoreManager.decryptFromPeer(text)
                     Log.d("LocalMesh", "Respuesta cifrada recibida: $decrypted")
+                    dispatchPeerMessage(JSONObject(decrypted))
                 } catch (_: Exception) {}
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                if (clientWebSocket === webSocket) clientWebSocket = null
                 _connectionType.value = ConnectionType.CLOUD_BACKUP
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 Log.w("LocalMesh", "Fallo enlace local, usando respaldo por Nube: ${t.message}")
+                if (clientWebSocket === webSocket) clientWebSocket = null
                 _connectionType.value = ConnectionType.CLOUD_BACKUP
             }
         })
     }
 
-    fun sendLocalCommand(action: String, pin: String? = null, detail: String? = null): Boolean {
+    fun sendLocalCommand(action: String, pin: String? = null, detail: String? = null, commandId: String? = null): Boolean {
         // 1. Intentar por WebSocket si está conectado
         val ws = clientWebSocket
-        if (ws != null) {
+        if (ws != null && _connectionType.value == ConnectionType.LOCAL_WIFI) {
             try {
                 val json = JSONObject().apply {
                     put("action", action)
                     if (pin != null) put("pin", pin)
                     if (detail != null) put("detail", detail)
+                    if (commandId != null) put("id", commandId)
                     put("timestamp", System.currentTimeMillis())
                 }
 
                 // Cifrar con AES-GCM
-                val encrypted = keystoreManager.encrypt(json.toString())
+                val encrypted = keystoreManager.encryptForPeer(json.toString())
                 val sent = ws.send(encrypted)
                 if (sent) return true
             } catch (_: Exception) {}
-        }
-
-        // 2. Si no hay WebSocket LAN, intentar por Bluetooth P2P
-        val btManager = bluetoothSyncManager
-        if (btManager != null && btManager.isConnected.value) {
-            val btSent = btManager.sendCommand(action, pin, detail)
-            if (btSent) {
-                _connectionType.value = ConnectionType.BLUETOOTH
-                return true
-            }
         }
 
         _connectionType.value = ConnectionType.CLOUD_BACKUP
@@ -280,10 +331,6 @@ class LocalMeshManager(
             clientWebSocket?.close(1000, "Panel desconectado")
         } catch (_: Exception) {}
         clientWebSocket = null
-        if (bluetoothSyncManager?.isConnected?.value == true) {
-            _connectionType.value = ConnectionType.BLUETOOTH
-        } else {
-            _connectionType.value = ConnectionType.CLOUD_BACKUP
-        }
+        _connectionType.value = ConnectionType.CLOUD_BACKUP
     }
 }

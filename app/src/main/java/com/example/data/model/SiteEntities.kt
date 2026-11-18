@@ -1,6 +1,8 @@
 package com.example.data.model
 
 import com.google.firebase.firestore.IgnoreExtraProperties
+import org.json.JSONArray
+import org.json.JSONObject
 
 @IgnoreExtraProperties
 data class SiteSchedule(
@@ -17,7 +19,9 @@ data class SiteAlarmState(
     val pinHash: String = "",
     val pinSalt: String = "",
     val sirenaActiva: Boolean = false,
-    val estroboActivo: Boolean = false
+    val estroboActivo: Boolean = false,
+    val zonasActivas: List<String> = emptyList(),
+    val zonaAlarma: String = "" // "ZN-05 · PIR Interior Pasillo Central" cuando estado == "alarma"
 )
 
 @IgnoreExtraProperties
@@ -34,6 +38,7 @@ data class SiteCameraConfig(
     val sensibilidad: Long = 5L, // 1..10
     val tiempoConfirmacion: Long = 2L, // segundos
     val estadoCamara: String = "inactiva", // "activa" | "inactiva" | "error" | "sin_permiso"
+    val lente: String = "frontal", // "frontal" | "trasera"
     val ultimoMovimientoDetectado: Long = 0L
 )
 
@@ -45,3 +50,41 @@ data class SecurityEvent(
     val origen: String = "", // "nodo" | "panel"
     val timestamp: Long = System.currentTimeMillis()
 )
+
+/** Estado que el nodo empuja a los paneles por el enlace local (WiFi). */
+fun peerStateJson(site: SiteAlarmState, sensors: SiteSensorState, nodeOnline: Boolean): JSONObject =
+    JSONObject()
+        .put("type", "state")
+        .put("online", nodeOnline)
+        .put("estado", site.estado)
+        .put("sirenaActiva", site.sirenaActiva)
+        .put("estroboActivo", site.estroboActivo)
+        .put("zonaAlarma", site.zonaAlarma)
+        .put("zonasActivas", JSONArray(site.zonasActivas))
+        .put("pirMovimiento", sensors.pirMovimiento)
+        .put("reedPuertaAbierta", sensors.reedPuertaAbierta)
+        .put("ultimoPir", sensors.ultimoPir)
+        .put("ultimoReed", sensors.ultimoReed)
+        .put("timestamp", System.currentTimeMillis())
+
+fun SiteAlarmState.withPeer(peer: JSONObject?): SiteAlarmState {
+    if (peer == null) return this
+    val zones = peer.optJSONArray("zonasActivas")
+    return copy(
+        estado = peer.optString("estado", estado),
+        sirenaActiva = peer.optBoolean("sirenaActiva", sirenaActiva),
+        estroboActivo = peer.optBoolean("estroboActivo", estroboActivo),
+        zonaAlarma = peer.optString("zonaAlarma", zonaAlarma),
+        zonasActivas = if (zones != null) List(zones.length()) { zones.getString(it) } else zonasActivas
+    )
+}
+
+fun SiteSensorState.withPeer(peer: JSONObject?): SiteSensorState {
+    if (peer == null) return this
+    return copy(
+        pirMovimiento = peer.optBoolean("pirMovimiento", pirMovimiento),
+        reedPuertaAbierta = peer.optBoolean("reedPuertaAbierta", reedPuertaAbierta),
+        ultimoPir = peer.optLong("ultimoPir", ultimoPir),
+        ultimoReed = peer.optLong("ultimoReed", ultimoReed)
+    )
+}

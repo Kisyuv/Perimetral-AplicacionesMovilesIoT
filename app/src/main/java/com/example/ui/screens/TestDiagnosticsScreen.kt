@@ -56,6 +56,7 @@ import com.example.data.repository.AuthRepository
 import com.example.data.repository.SiteAlarmRepository
 import com.example.security.KeystoreManager
 import com.example.security.PinSecurity
+import com.example.ui.theme.DotoFamily
 import com.example.ui.theme.AccentAlarm
 import com.example.ui.theme.AccentArmed
 import com.example.ui.theme.AccentDisarmed
@@ -120,7 +121,7 @@ fun TestDiagnosticsScreen(
             TestCase("4", "Demostración de Sirena Acústica", "Emisión audible de barrido de alarma en canal USAGE_ALARM (880-1480Hz)."),
             TestCase("5", "Demostración de Destello Físico", "Pulsos reales en la linterna LED trasera y confirmación de hardware."),
             TestCase("6", "Inmunidad a Movimiento de Celular", "Verificación de supresión por acelerómetro y filtro de cuadrícula 4x4 contra falsas alarmas."),
-            TestCase("7", "Red Local (NSD & WebSocket)", "Comprobación de servidor local en puerto 8765 y respaldo Bluetooth P2P."),
+            TestCase("7", "Red Local (NSD & WebSocket)", "Comprobación de servidor local en puerto 8765 con respaldo por la nube."),
             TestCase("8", "Flujo de Alarma Perimetral", "Ciclo de armado, simulación de detección PIR y activación de actuadores."),
             TestCase("9", "Flujo Sin Alarma (Desarmado)", "Apertura de portón (reed) con sistema desarmado genera log sin disparar sirena."),
             TestCase("10", "Auto-Armado Fuera de Horario", "Evaluación de ventana horaria nocturna contra reloj del sistema."),
@@ -263,6 +264,7 @@ fun TestDiagnosticsScreen(
                 text = "BATERÍA DE PRUEBAS EN VIVO",
                 color = TextPrimary,
                 fontSize = 20.sp,
+                fontFamily = DotoFamily,
                 fontWeight = FontWeight.Bold,
                 letterSpacing = 1.sp
             )
@@ -406,8 +408,8 @@ fun TestDiagnosticsScreen(
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(8.dp))
-                .background(Color(0xFF0F172A))
-                .border(1.dp, Color(0xFF334155), RoundedCornerShape(8.dp))
+                .background(DarkSurface)
+                .border(1.dp, DarkBorder, RoundedCornerShape(8.dp))
                 .padding(12.dp)
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -428,7 +430,7 @@ fun TestDiagnosticsScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(110.dp)
-                        .background(Color(0xFF020617))
+                        .background(DarkBackground)
                         .padding(8.dp)
                         .verticalScroll(rememberScrollState())
                 ) {
@@ -436,7 +438,7 @@ fun TestDiagnosticsScreen(
                         terminalLogs.forEach { log ->
                             Text(
                                 text = log,
-                                color = if (log.contains("OK")) AccentDisarmed else if (log.contains("FALLO")) AccentAlarm else Color(0xFF94A3B8),
+                                color = if (log.contains("OK")) AccentDisarmed else if (log.contains("FALLO")) TextPrimary else TextSecondary,
                                 fontSize = 10.sp,
                                 fontFamily = FontFamily.Monospace,
                                 lineHeight = 14.sp
@@ -459,7 +461,7 @@ fun TestDiagnosticsScreen(
                         .background(DarkSurface)
                         .border(1.dp, when (test.status) {
                             TestStatus.PASSED -> AccentDisarmed.copy(alpha = 0.8f)
-                            TestStatus.FAILED -> AccentAlarm
+                            TestStatus.FAILED -> TextPrimary
                             TestStatus.RUNNING -> accent
                             TestStatus.PENDING -> DarkBorder
                         }, RoundedCornerShape(8.dp))
@@ -515,9 +517,9 @@ fun TestDiagnosticsScreen(
                                         verticalAlignment = Alignment.CenterVertically,
                                         modifier = Modifier.clickable(enabled = !isRunningAll) { runSingleTest(test.id) }
                                     ) {
-                                        Icon(Icons.Outlined.ErrorOutline, contentDescription = "FALLO", tint = AccentAlarm, modifier = Modifier.size(18.dp))
+                                        Icon(Icons.Outlined.ErrorOutline, contentDescription = "FALLO", tint = TextPrimary, modifier = Modifier.size(18.dp))
                                         Spacer(modifier = Modifier.width(4.dp))
-                                        Text(text = "REINTENTAR", color = AccentAlarm, fontSize = 9.sp)
+                                        Text(text = "REINTENTAR", color = TextPrimary, fontSize = 9.sp)
                                     }
                                 }
                             }
@@ -629,11 +631,10 @@ private suspend fun executeLiveTestAssertion(
             Pair(true, "Inmunidad confirmada: Acelerómetro cancela detección al mover móvil; cuadrícula 4x4 solo acepta objetos.")
         }
         "7" -> {
-            // Red Local & Bluetooth P2P
+            // Red Local
             onLog("Red Local: Puerto WebSocket 8765 activo. Enlace mDNS '_perimetral._tcp' listo.")
-            onLog("Bluetooth P2P: Servidor RFCOMM UUID fa87c0d0... disponible para respaldo sin WiFi.")
             delay(300L)
-            Pair(true, "Canal dual disponible: WebSocket LAN de baja latencia con fallback a Bluetooth P2P y Nube.")
+            Pair(true, "Canal dual disponible: WebSocket LAN de baja latencia con respaldo por la Nube.")
         }
         "8" -> {
             // Flujo de Alarma Perimetral

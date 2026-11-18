@@ -40,6 +40,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.repository.DeviceRoleRepository
+import com.example.ui.theme.DotoFamily
 import com.example.ui.theme.AccentAlarm
 import com.example.ui.theme.DarkBackground
 import com.example.ui.theme.DarkBorder
@@ -106,7 +107,7 @@ fun RoleSelectionScreen(
                 Icon(
                     imageVector = Icons.Outlined.WarningAmber,
                     contentDescription = null,
-                    tint = AccentAlarm,
+                    tint = TextPrimary,
                     modifier = Modifier.size(32.dp)
                 )
             },
@@ -128,7 +129,7 @@ fun RoleSelectionScreen(
                 Box(
                     modifier = Modifier
                         .clip(RoundedCornerShape(4.dp))
-                        .background(AccentAlarm)
+                        .border(1.dp, TextPrimary, RoundedCornerShape(4.dp))
                         .clickable {
                             showConflictDialog = false
                             selectRole("nodo", forceReplace = true)
@@ -180,6 +181,7 @@ fun RoleSelectionScreen(
                 text = "ROL DE DISPOSITIVO",
                 color = TextPrimary,
                 fontSize = 24.sp,
+                fontFamily = DotoFamily,
                 fontWeight = FontWeight.Medium,
                 letterSpacing = 1.sp
             )
@@ -200,12 +202,12 @@ fun RoleSelectionScreen(
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(6.dp))
                     .background(DarkSurface)
-                    .border(1.dp, AccentAlarm, RoundedCornerShape(6.dp))
+                    .border(1.dp, TextSecondary, RoundedCornerShape(6.dp))
                     .padding(14.dp)
             ) {
                 Text(
                     text = errorMessage!!,
-                    color = AccentAlarm,
+                    color = TextPrimary,
                     fontSize = 12.sp
                 )
             }

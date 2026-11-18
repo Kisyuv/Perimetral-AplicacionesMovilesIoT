@@ -1,40 +1,48 @@
 package com.example.ui.theme
 
 import androidx.compose.material3.Typography
+import androidx.compose.ui.text.font.Font
+import com.example.R
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 
-// Tipografía sans-serif limpia, minimalista y con amplio espaciado
+// Doto (OFL, Google Fonts) imita una matriz de puntos: solo para títulos, cifras grandes y estados.
+// El resto usa la sans del sistema para que los textos largos sigan siendo legibles.
+val DotoFamily = FontFamily(
+    Font(R.font.doto_regular, FontWeight.Normal),
+    Font(R.font.doto_bold, FontWeight.Bold)
+)
+
 val Typography = Typography(
     displayLarge = TextStyle(
-        fontFamily = FontFamily.SansSerif,
-        fontWeight = FontWeight.Light,
+        fontFamily = DotoFamily,
+        fontWeight = FontWeight.Bold,
         fontSize = 48.sp,
         lineHeight = 56.sp,
         letterSpacing = (-0.5).sp,
         color = TextPrimary
     ),
     displayMedium = TextStyle(
-        fontFamily = FontFamily.SansSerif,
-        fontWeight = FontWeight.Normal,
+        fontFamily = DotoFamily,
+        fontWeight = FontWeight.Bold,
         fontSize = 36.sp,
         lineHeight = 44.sp,
         letterSpacing = (-0.25).sp,
         color = TextPrimary
     ),
     headlineLarge = TextStyle(
-        fontFamily = FontFamily.SansSerif,
-        fontWeight = FontWeight.Medium,
+        fontFamily = DotoFamily,
+        fontWeight = FontWeight.Bold,
         fontSize = 28.sp,
         lineHeight = 36.sp,
         letterSpacing = 0.sp,
         color = TextPrimary
     ),
     headlineMedium = TextStyle(
-        fontFamily = FontFamily.SansSerif,
-        fontWeight = FontWeight.Normal,
+        fontFamily = DotoFamily,
+        fontWeight = FontWeight.Bold,
         fontSize = 22.sp,
         lineHeight = 28.sp,
         letterSpacing = 0.15.sp,

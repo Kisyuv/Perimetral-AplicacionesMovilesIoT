@@ -46,7 +46,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.BatteryAlert
-import androidx.compose.material.icons.outlined.CameraRear
+import androidx.compose.material.icons.outlined.CameraFront
 import androidx.compose.material.icons.outlined.Campaign
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.DoorSliding
@@ -67,6 +67,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -88,6 +89,7 @@ import com.example.camera.MotionDetectorAnalyzer
 import com.example.data.model.SiteAlarmState
 import com.example.data.model.SiteCameraConfig
 import com.example.data.model.SiteSensorState
+import com.example.ui.components.rememberPermissionRequest
 import com.example.ui.theme.AccentAlarm
 import com.example.ui.theme.AccentArmed
 import com.example.ui.theme.AccentDisarmed
@@ -113,8 +115,10 @@ fun NodeHubScreen(
     onCameraStatusChange: (status: String) -> Unit,
     onFallbackToSimulated: () -> Unit,
     onResetSensors: () -> Unit = {},
+    onSelectLens: (String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
+    val useBackCamera = cameraConfig.lente == "trasera"
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val accent = LocalAlarmAccentColor.current
@@ -162,7 +166,7 @@ fun NodeHubScreen(
         }
     }
 
-    // Instancia del analizador de movimiento CameraX (utilizando cámara trasera)
+    // Instancia del analizador de movimiento CameraX (utilizando cámara frontal)
     val analyzer = remember {
         MotionDetectorAnalyzer(
             onMotionDetected = onMotionDetected,
@@ -220,27 +224,19 @@ fun NodeHubScreen(
         }
     }
 
-    // Launcher para pedir permiso de CAMERA
-    val cameraPermissionLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestPermission()
-    ) { isGranted ->
-        if (isGranted) {
-            onCameraStatusChange("activa")
-        } else {
-            onCameraStatusChange("sin_permiso")
-            onFallbackToSimulated()
-        }
+    // Permiso de cámara: lo solicita el nodo solo cuando se va a usar la cámara frontal
+    val cameraPermission = rememberPermissionRequest(
+        permissions = arrayOf(Manifest.permission.CAMERA),
+        deniedMessage = "Se negó el permiso de cámara: el detector por cámara frontal no se activó."
+    )
+    LaunchedEffect(cameraPermission.message) {
+        if (cameraPermission.message != null) onCameraStatusChange("sin_permiso")
     }
 
     // Si el modo configurado en Firestore es cámara, validar permisos
     LaunchedEffect(cameraConfig.modoPir) {
         if (cameraConfig.modoPir == "camara") {
-            val permissionGranted = ContextCompat.checkSelfPermission(
-                context,
-                Manifest.permission.CAMERA
-            ) == PackageManager.PERMISSION_GRANTED
-
-            if (!permissionGranted) {
+            if (!cameraPermission.isGranted) {
                 showCameraRationaleDialog = true
             } else {
                 onCameraStatusChange("activa")
@@ -250,7 +246,7 @@ fun NodeHubScreen(
         }
     }
 
-    // Diálogo Rationale de Privacidad para Cámara Trasera
+    // Diálogo Rationale de Privacidad para Cámara Frontal
     if (showCameraRationaleDialog) {
         AlertDialog(
             onDismissRequest = {
@@ -260,11 +256,11 @@ fun NodeHubScreen(
             containerColor = DarkSurface,
             titleContentColor = TextPrimary,
             textContentColor = TextSecondary,
-            icon = { Icon(Icons.Outlined.CameraRear, contentDescription = null, tint = accent, modifier = Modifier.size(32.dp)) },
-            title = { Text("Sensor de Movimiento por Cámara Trasera", fontSize = 17.sp, fontWeight = FontWeight.Bold) },
+            icon = { Icon(Icons.Outlined.CameraFront, contentDescription = null, tint = accent, modifier = Modifier.size(32.dp)) },
+            title = { Text("Sensor de Movimiento por Cámara Frontal", fontSize = 17.sp, fontWeight = FontWeight.Bold) },
             text = {
                 Text(
-                    text = "Perimetral utiliza la cámara trasera apuntando al pasillo de la bodega para analizar variaciones de luminosidad en tiempo real y detectar intrusos.\n\nPrivacidad absoluta: los fotogramas se procesan únicamente en la memoria volátil del procesador, nunca se graban, no se almacenan y nunca se transmiten a internet.",
+                    text = "Perimetral utiliza la cámara frontal apuntando al pasillo de la bodega para analizar variaciones de luminosidad en tiempo real y detectar intrusos.\n\nPrivacidad absoluta: los fotogramas se procesan únicamente en la memoria volátil del procesador, nunca se graban, no se almacenan y nunca se transmiten a internet.",
                     fontSize = 13.sp,
                     lineHeight = 19.sp,
                     color = TextSecondary
@@ -277,11 +273,11 @@ fun NodeHubScreen(
                         .background(accent)
                         .clickable {
                             showCameraRationaleDialog = false
-                            cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                            cameraPermission.request { onCameraStatusChange("activa") }
                         }
                         .padding(horizontal = 16.dp, vertical = 10.dp)
                 ) {
-                    Text("Activar Cámara Trasera", color = DarkBackground, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    Text("Activar Cámara Frontal", color = DarkBackground, fontSize = 12.sp, fontWeight = FontWeight.Bold)
                 }
             },
             dismissButton = {
@@ -352,7 +348,7 @@ fun NodeHubScreen(
     }
 
     // Fondo reactivo con efecto estroboscópico suave durante alerta
-    val backgroundFlashColor = if (isStrobeActive && strobeFlashState) Color.White else DarkBackground
+    val backgroundFlashColor = if (isStrobeActive && strobeFlashState) TextPrimary else DarkBackground
 
     Column(
         modifier = modifier
@@ -418,6 +414,14 @@ fun NodeHubScreen(
                     color = TextSecondary,
                     fontSize = 12.sp
                 )
+                if (siteState.estado == "alarma") {
+                    Text(
+                        text = "¡Alarma activada en ${siteState.zonaAlarma.ifBlank { "zona no identificada" }}!",
+                        color = AccentAlarm,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
             }
         }
 
@@ -457,7 +461,7 @@ fun NodeHubScreen(
             ) {
                 SensorLiveStatusCard(
                     name = "Sensor PIR (Movimiento)",
-                    subtext = if (cameraConfig.modoPir == "camara") "Cámara trasera activa" else "Modo simulado",
+                    subtext = if (cameraConfig.modoPir == "camara") "Cámara ${cameraConfig.lente} · ZN-05" else "Modo simulado · ZN-05",
                     isActive = sensorState.pirMovimiento,
                     activeText = "¡MOVIMIENTO DETECTADO!",
                     idleText = "Normal · Sin movimiento",
@@ -467,7 +471,7 @@ fun NodeHubScreen(
 
                 SensorLiveStatusCard(
                     name = "Reed Switch (Portón)",
-                    subtext = "Contacto magnético cortina",
+                    subtext = "Contacto magnético cortina · ZN-01",
                     isActive = sensorState.reedPuertaAbierta,
                     activeText = "¡PUERTA ABIERTA!",
                     idleText = "Normal · Puerta cerrada",
@@ -505,8 +509,41 @@ fun NodeHubScreen(
             }
         }
 
-        // 3. Módulo CameraX con Cámara Trasera
-        if (cameraConfig.modoPir == "camara" && ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+        // Permiso de cámara negado: aviso y reintento
+        if (cameraConfig.modoPir == "camara" && !cameraPermission.isGranted) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(14.dp))
+                    .background(DarkSurface)
+                    .border(1.dp, AccentAlarm.copy(alpha = 0.5f), RoundedCornerShape(14.dp))
+                    .padding(16.dp)
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        text = cameraPermission.message
+                            ?: "El detector por cámara frontal necesita permiso de cámara en este nodo.",
+                        color = TextSecondary,
+                        fontSize = 12.sp,
+                        lineHeight = 17.sp
+                    )
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(accent)
+                            .clickable { cameraPermission.request { onCameraStatusChange("activa") } }
+                            .padding(vertical = 10.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text("Activar cámara frontal", color = DarkBackground, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+
+        // 3. Módulo CameraX con Cámara Frontal
+        if (cameraConfig.modoPir == "camara" && cameraPermission.isGranted) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -522,11 +559,11 @@ fun NodeHubScreen(
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Outlined.CameraRear, contentDescription = null, tint = accent, modifier = Modifier.size(18.dp))
+                            Icon(Icons.Outlined.CameraFront, contentDescription = null, tint = accent, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(8.dp))
                             Column {
-                                Text(text = "CÁMARA TRASERA (DETECTOR PIR)", color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                                Text(text = "320x240 · Detección de intrusos", color = TextMuted, fontSize = 11.sp)
+                                Text(text = "CÁMARA ${cameraConfig.lente.uppercase()} (DETECTOR PIR · ZN-05)", color = TextPrimary, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                                Text(text = "640x480 · Detección de intrusos", color = TextMuted, fontSize = 11.sp)
                             }
                         }
 
@@ -546,7 +583,27 @@ fun NodeHubScreen(
                         }
                     }
 
-                    // Surface CameraX usando DEFAULT_BACK_CAMERA
+                    // Selector de lente: frontal o trasera principal
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf("frontal" to "Frontal", "trasera" to "Trasera principal").forEach { (value, label) ->
+                            val selected = cameraConfig.lente == value
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(if (selected) accent.copy(alpha = 0.18f) else DarkSurfaceVariant)
+                                    .border(1.dp, if (selected) accent else DarkBorder, RoundedCornerShape(8.dp))
+                                    .clickable(enabled = !selected) { onSelectLens(value) }
+                                    .padding(vertical = 8.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(label, color = if (selected) accent else TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                            }
+                        }
+                    }
+
+                    // Surface CameraX: se recrea al cambiar de lente
+                    key(cameraConfig.lente) {
                     AndroidView(
                         factory = { ctx ->
                             val previewView = PreviewView(ctx)
@@ -561,13 +618,15 @@ fun NodeHubScreen(
                                     }
 
                                     val imageAnalysis = ImageAnalysis.Builder()
-                                        .setTargetResolution(Size(320, 240))
+                                        .setTargetResolution(Size(640, 480))
                                         .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                                         .build()
 
                                     imageAnalysis.setAnalyzer(cameraExecutor, analyzer)
 
-                                    val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
+                                    // Frontal: deja libre la trasera para el estroboscopio con su LED.
+                                    // Trasera: DEFAULT_BACK_CAMERA es la cámara principal.
+                                    val cameraSelector = if (useBackCamera) CameraSelector.DEFAULT_BACK_CAMERA else CameraSelector.DEFAULT_FRONT_CAMERA
                                     cameraProvider.unbindAll()
                                     val camera = cameraProvider.bindToLifecycle(
                                         lifecycleOwner,
@@ -575,7 +634,9 @@ fun NodeHubScreen(
                                         preview,
                                         imageAnalysis
                                     )
-                                    actuatorManager.setCameraControl(camera.cameraControl)
+                                    // Con la trasera abierta, la linterna solo puede encenderse a través de CameraX
+                                    actuatorManager.setCameraControl(if (useBackCamera) camera.cameraControl else null)
+                                    analyzer.startCalibration(2)
                                     onCameraStatusChange("activa")
                                 } catch (e: Exception) {
                                     onCameraStatusChange("error")
@@ -590,6 +651,7 @@ fun NodeHubScreen(
                             .height(if (showCameraPreview) 180.dp else 1.dp)
                             .clip(RoundedCornerShape(8.dp))
                     )
+                    }
                 }
             }
         }

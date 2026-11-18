@@ -24,6 +24,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.SecurityEvent
+import com.example.ui.theme.DotoFamily
 import com.example.ui.theme.AccentAlarm
 import com.example.ui.theme.DarkBackground
 import com.example.ui.theme.DarkBorder
@@ -58,6 +59,7 @@ fun EventsScreen(
                 text = "REGISTRO DE EVENTOS",
                 color = TextPrimary,
                 fontSize = 24.sp,
+                fontFamily = DotoFamily,
                 fontWeight = FontWeight.Medium,
                 letterSpacing = 1.sp
             )

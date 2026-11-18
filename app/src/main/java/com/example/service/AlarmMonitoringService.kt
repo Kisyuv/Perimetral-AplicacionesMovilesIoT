@@ -16,6 +16,7 @@ import android.os.PowerManager
 import androidx.core.app.NotificationCompat
 import com.example.MainActivity
 import com.example.PerimetralApplication
+import com.example.data.model.withPeer
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -97,14 +98,30 @@ class AlarmMonitoringService : Service() {
         val actuators = app.container.alarmActuatorManager
         val deviceRole = app.container.deviceManager.getCachedRole()
 
+        val mesh = app.container.localMeshManager
+        val deviceManager = app.container.deviceManager
+        var lastAlarmKey: String? = null
         serviceScope.launch {
-            siteRepo.observeSiteState("bodega_central").collectLatest { state ->
+            // En el panel sin internet, el estado llega del nodo por el enlace local
+            kotlinx.coroutines.flow.combine(siteRepo.observeSiteState("bodega_central"), mesh.peerState) { remote, peer ->
+                if (deviceRole == "panel") remote.withPeer(peer) else remote
+            }.collectLatest { state ->
                 if (state.estado == "alarma") {
-                    showCriticalAlarmNotification("¡INTRUSIÓN EN BODEGA!", "Se ha activado una alarma perimetral.")
+                    // Notificar una vez por disparo (estado + zona), no en cada actualización del documento
+                    val alarmKey = "alarma:${state.zonaAlarma}"
+                    if (alarmKey != lastAlarmKey && deviceManager.areAlarmNotificationsEnabled()) {
+                        val where = state.zonaAlarma.ifBlank { "zona no identificada" }
+                        showCriticalAlarmNotification("¡INTRUSIÓN EN BODEGA!", "Alarma activada en $where.")
+                    }
+                    lastAlarmKey = alarmKey
                     if (deviceRole == "nodo" && state.sirenaActiva) {
                         actuators.startSiren()
                     }
                 } else {
+                    if (lastAlarmKey != null) {
+                        (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancel(999)
+                    }
+                    lastAlarmKey = null
                     if (deviceRole == "nodo") {
                         actuators.stopAll()
                     }

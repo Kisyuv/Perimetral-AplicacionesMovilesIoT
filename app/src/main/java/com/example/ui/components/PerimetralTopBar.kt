@@ -27,6 +27,8 @@ import com.example.ui.theme.DarkBorderSubtle
 import com.example.ui.theme.DarkSurfaceVariant
 import com.example.ui.theme.LocalAlarmAccentColor
 import com.example.ui.theme.SystemAlarmState
+import com.example.ui.theme.DarkBorder
+import com.example.ui.theme.DotoFamily
 import com.example.ui.theme.TextMuted
 import com.example.ui.theme.TextPrimary
 
@@ -61,8 +63,9 @@ fun PerimetralTopBar(
                     Text(
                         text = "PERIMETRAL",
                         color = TextPrimary,
-                        fontSize = 17.sp,
-                        fontWeight = FontWeight.Medium,
+                        fontFamily = DotoFamily,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
                         letterSpacing = 2.sp
                     )
 
@@ -71,7 +74,7 @@ fun PerimetralTopBar(
                         Box(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(4.dp))
-                                .background(DarkSurfaceVariant)
+                                .border(1.dp, DarkBorder, RoundedCornerShape(4.dp))
                                 .padding(horizontal = 6.dp, vertical = 2.dp)
                         ) {
                             Text(

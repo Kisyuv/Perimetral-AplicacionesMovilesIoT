@@ -46,8 +46,6 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
-import androidx.compose.material3.Slider
-import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
@@ -71,6 +69,7 @@ import com.example.data.model.SiteAlarmState
 import com.example.data.model.SiteCameraConfig
 import com.example.data.model.SiteSensorState
 import com.example.domain.model.PerimeterZone
+import com.example.ui.theme.DotoFamily
 import com.example.ui.theme.AccentAlarm
 import com.example.ui.theme.AccentArmed
 import com.example.ui.theme.AccentDisarmed
@@ -96,6 +95,7 @@ fun DashboardScreen(
     onDisarm: (pin: String) -> Unit,
     onSilenceActuators: (pin: String, silenceSiren: Boolean, turnOffStrobe: Boolean) -> Unit,
     onSimulateSensor: (type: String, detail: String) -> Unit,
+    onSimulateZone: (zoneId: String) -> Unit = {},
     onUpdateCameraConfig: (modoPir: String, sensibilidad: Long, tiempoConfirmacion: Long) -> Unit,
     onResetSensors: () -> Unit = {},
     zones: List<PerimeterZone> = emptyList(),
@@ -170,7 +170,7 @@ fun DashboardScreen(
                     )
 
                     pinError?.let {
-                        Text(text = it, color = AccentAlarm, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                        Text(text = it, color = TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.Medium)
                     }
                 }
             },
@@ -267,6 +267,7 @@ fun DashboardScreen(
                     text = siteState.estado.uppercase(),
                     color = accent,
                     fontSize = 24.sp,
+                    fontFamily = DotoFamily,
                     fontWeight = FontWeight.Bold,
                     letterSpacing = 2.sp
                 )
@@ -277,7 +278,7 @@ fun DashboardScreen(
                     text = when (siteState.estado) {
                         "desarmada" -> "Perímetro libre. Sensores en monitoreo informativo de rutina."
                         "armada" -> "Vigilancia perimetral activa. Alarma armada para detección de intrusiones."
-                        "alarma" -> "¡INTRUSIÓN CONFIRMADA EN BODEGA! Sirena y estroboscopio activos."
+                        "alarma" -> "¡INTRUSIÓN CONFIRMADA EN ${siteState.zonaAlarma.ifBlank { "BODEGA" }}! Sirena y estroboscopio activos."
                         else -> "Estado sincronizado con la nube."
                     },
                     color = TextSecondary,
@@ -285,6 +286,17 @@ fun DashboardScreen(
                     textAlign = TextAlign.Center,
                     lineHeight = 18.sp
                 )
+
+                if (siteState.estado != "alarma" && zones.isNotEmpty() && zones.none { it.isActive }) {
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Text(
+                        text = "Todas las zonas están desactivadas: aunque armes el sistema, ningún sensor disparará la alarma.",
+                        color = TextPrimary,
+                        fontSize = 12.sp,
+                        textAlign = TextAlign.Center,
+                        lineHeight = 16.sp
+                    )
+                }
 
                 Spacer(modifier = Modifier.height(20.dp))
 
@@ -736,46 +748,38 @@ fun DashboardScreen(
                     fontWeight = FontWeight.Medium
                 )
 
-                // Botones para simular
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(DarkSurfaceVariant)
-                            .border(1.dp, DarkBorder, RoundedCornerShape(8.dp))
-                            .clickable { onSimulateSensor("pir", "Movimiento simulado por operador") }
-                            .padding(vertical = 12.dp, horizontal = 10.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Outlined.Sensors, contentDescription = null, tint = accent, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(text = "Simular Movimiento", color = TextPrimary, fontSize = 12.sp)
+                // Un botón de simulación por zona: dispara la alarma solo si esa zona está activa
+                zones.chunked(3).forEach { rowZones ->
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        rowZones.forEach { zone ->
+                            Column(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(if (zone.isActive) accent.copy(alpha = 0.12f) else DarkSurfaceVariant)
+                                    .border(1.dp, if (zone.isActive) accent else DarkBorder, RoundedCornerShape(8.dp))
+                                    .clickable { onSimulateZone(zone.id) }
+                                    .padding(vertical = 10.dp, horizontal = 6.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Text(text = "Simular ${zone.id}", color = if (zone.isActive) accent else TextPrimary, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                Text(
+                                    text = zone.name,
+                                    color = TextMuted,
+                                    fontSize = 9.sp,
+                                    textAlign = TextAlign.Center,
+                                    maxLines = 2,
+                                    lineHeight = 11.sp
+                                )
+                            }
                         }
-                    }
-
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(DarkSurfaceVariant)
-                            .border(1.dp, DarkBorder, RoundedCornerShape(8.dp))
-                            .clickable { onSimulateSensor("reed", "Apertura forzada simulada por operador") }
-                            .padding(vertical = 12.dp, horizontal = 10.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(Icons.Outlined.DoorSliding, contentDescription = null, tint = accent, modifier = Modifier.size(16.dp))
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(text = "Simular Puerta", color = TextPrimary, fontSize = 12.sp)
-                        }
+                        repeat(3 - rowZones.size) { Spacer(modifier = Modifier.weight(1f)) }
                     }
                 }
             }
         }
 
-        // 4. Configuración del Sensor de Movimiento (Cámara trasera vs Simulado + Slider)
+        // 4. Configuración del Sensor de Movimiento (Cámara vs Simulado + sensibilidad)
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -793,7 +797,7 @@ fun DashboardScreen(
                     letterSpacing = 0.8.sp
                 )
 
-                // Selector Cámara Trasera vs Simulado
+                // Selector Cámara Frontal vs Simulado
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -840,7 +844,7 @@ fun DashboardScreen(
                             )
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
-                                text = "Cámara trasera",
+                                text = "Cámara",
                                 color = if (cameraConfig.modoPir == "camara") TextPrimary else TextMuted,
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Medium
@@ -849,28 +853,34 @@ fun DashboardScreen(
                     }
                 }
 
-                // Slider Sensibilidad (1 a 10)
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Text(text = "Sensibilidad de detección", color = TextSecondary, fontSize = 12.sp)
-                        Text(text = "${cameraConfig.sensibilidad} / 10", color = accent, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                // Sensibilidad: dos niveles fijos (1 = baja, 5 = normal)
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(text = "Sensibilidad de detección", color = TextSecondary, fontSize = 12.sp)
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        val currentLevel = if (cameraConfig.sensibilidad <= 1L) 1L else 5L
+                        listOf(1L to "Baja (1)", 5L to "Normal (5)").forEach { (level, label) ->
+                            val selected = currentLevel == level
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(if (selected) accent.copy(alpha = 0.15f) else DarkSurfaceVariant)
+                                    .border(1.dp, if (selected) accent else DarkBorder, RoundedCornerShape(8.dp))
+                                    .clickable(enabled = !selected) {
+                                        onUpdateCameraConfig(cameraConfig.modoPir, level, cameraConfig.tiempoConfirmacion)
+                                    }
+                                    .padding(vertical = 10.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(text = label, color = if (selected) accent else TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                            }
+                        }
                     }
-
-                    Slider(
-                        value = cameraConfig.sensibilidad.toFloat(),
-                        onValueChange = {
-                            onUpdateCameraConfig(cameraConfig.modoPir, it.toLong(), cameraConfig.tiempoConfirmacion)
-                        },
-                        valueRange = 1f..10f,
-                        steps = 8,
-                        colors = SliderDefaults.colors(
-                            thumbColor = accent,
-                            activeTrackColor = accent,
-                            inactiveTrackColor = DarkBorder
-                        )
+                    Text(
+                        text = "Baja: solo movimientos grandes o cercanos. Normal: detecta también movimientos más pequeños.",
+                        color = TextMuted,
+                        fontSize = 10.sp,
+                        lineHeight = 14.sp
                     )
                 }
             }
