@@ -1,3 +1,4 @@
+import java.util.Properties
 import com.google.gms.googleservices.GoogleServicesPlugin.MissingGoogleServicesStrategy
 
 plugins {
@@ -7,6 +8,12 @@ plugins {
   alias(libs.plugins.secrets)
   alias(libs.plugins.google.services)
 }
+
+// Credenciales MQTT (EMQX Cloud) en local.properties, fuera de git; vacías si faltan.
+val localProps = Properties().apply {
+  rootProject.file("local.properties").takeIf { it.exists() }?.inputStream()?.use { load(it) }
+}
+fun mqttProp(k: String) = "\"" + localProps.getProperty(k, "") + "\""
 
 android {
   namespace = "com.example"
@@ -18,6 +25,9 @@ android {
     targetSdk = 36
     versionCode = 1
     versionName = "1.0"
+    buildConfigField("String", "MQTT_HOST", mqttProp("mqtt.host"))
+    buildConfigField("String", "MQTT_USER", mqttProp("mqtt.user"))
+    buildConfigField("String", "MQTT_PASSWORD", mqttProp("mqtt.password"))
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }

@@ -1,6 +1,7 @@
 package com.example.network
 
 import android.util.Log
+import com.example.BuildConfig
 import com.example.data.repository.SiteAlarmRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -21,6 +22,7 @@ import org.eclipse.paho.client.mqttv3.MqttMessage
 import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence
 import org.json.JSONObject
 import java.util.UUID
+import javax.net.ssl.SSLSocketFactory
 
 /** Qué dispositivo hace de nodo de sensores. En los modos ESP32 este teléfono es siempre panel. */
 enum class NodeMode(val label: String) {
@@ -93,7 +95,11 @@ class Esp32MqttBridge(private val siteAlarmRepository: SiteAlarmRepository) {
 
     // Paho solo reintenta solo tras una primera conexión lograda; el primer intento lo repetimos aquí.
     private suspend fun conectar() {
-        val mqtt = MqttAsyncClient(BROKER_URI, "perimetral-app-" + UUID.randomUUID().toString().take(8), MemoryPersistence())
+        if (BuildConfig.MQTT_HOST.isEmpty()) {
+            Log.e(TAG, "Falta mqtt.host en local.properties: el bridge MQTT no conecta")
+            return
+        }
+        val mqtt = MqttAsyncClient("ssl://${BuildConfig.MQTT_HOST}:8883", "perimetral-app-" + UUID.randomUUID().toString().take(8), MemoryPersistence())
         mqtt.setCallback(callback)
         client = mqtt
         val opciones = MqttConnectOptions().apply {
@@ -101,6 +107,11 @@ class Esp32MqttBridge(private val siteAlarmRepository: SiteAlarmRepository) {
             isCleanSession = true
             connectionTimeout = 10
             keepAliveInterval = 30
+            userName = BuildConfig.MQTT_USER
+            password = BuildConfig.MQTT_PASSWORD.toCharArray()
+            // El trust store de Android ya incluye DigiCert Global Root G2 (CA de EMQX Cloud).
+            socketFactory = SSLSocketFactory.getDefault()
+            isHttpsHostnameVerificationEnabled = true
         }
         while (!mqtt.isConnected) {
             try {
@@ -177,6 +188,5 @@ class Esp32MqttBridge(private val siteAlarmRepository: SiteAlarmRepository) {
 
     private companion object {
         const val TAG = "Esp32MqttBridge"
-        const val BROKER_URI = "tcp://broker.hivemq.com:1883"
     }
 }

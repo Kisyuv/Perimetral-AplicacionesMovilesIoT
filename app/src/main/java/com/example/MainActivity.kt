@@ -175,6 +175,7 @@ class MainActivity : ComponentActivity() {
                                             siteState = siteState,
                                             sensorState = sensorState,
                                             cameraConfig = cameraConfig,
+                                            nodeMode = nodeMode,
                                             events = securityEvents,
                                             onArm = { viewModel.armSystem() },
                                             onDisarm = { pin -> viewModel.disarmSystem(pin) },

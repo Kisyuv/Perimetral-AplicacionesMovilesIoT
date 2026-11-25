@@ -1,4 +1,4 @@
-"""Monitor del canal MQTT de Perimetral (broker público HiveMQ).
+"""Monitor del canal MQTT de Perimetral (EMQX Cloud, MQTT sobre TLS).
 
 Uso:
   python mqtt_monitor.py                 # escucha todos los temas del canal (Ctrl+C para salir)
@@ -9,12 +9,14 @@ Requiere: pip install paho-mqtt (2.x)
 """
 import argparse
 import json
+import os
 import time
 
 import paho.mqtt.client as mqtt
 
-BROKER = "broker.hivemq.com"
-PUERTO = 1883
+# Mismos valores que MQTT_HOST/MQTT_USER/MQTT_PASS de secrets.h, por variables de entorno.
+BROKER = os.environ["MQTT_HOST"]
+PUERTO = 8883
 CANAL = "perimetral/a2b39e2e"  # debe coincidir con CANAL del sketch y el "Canal MQTT" de la app
 
 
@@ -29,6 +31,8 @@ def main():
 
     c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
     c.on_message = mostrar
+    c.username_pw_set(os.environ["MQTT_USER"], os.environ["MQTT_PASS"])
+    c.tls_set()  # valida el certificado con las CA del sistema
     c.connect(BROKER, PUERTO, 60)
     c.subscribe(f"{CANAL}/#")
     c.loop_start()

@@ -65,6 +65,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.SecurityEvent
+import com.example.network.NodeMode
 import com.example.data.model.SiteAlarmState
 import com.example.data.model.SiteCameraConfig
 import com.example.data.model.SiteSensorState
@@ -104,6 +105,7 @@ fun DashboardScreen(
     onActivateAllZones: () -> Unit = {},
     onDeactivateAllZones: () -> Unit = {},
     onUpdateSchedule: ((inicio: String, fin: String, autoArm: Boolean) -> Unit)? = null,
+    nodeMode: NodeMode = NodeMode.TELEFONO,
     modifier: Modifier = Modifier
 ) {
     val accent = LocalAlarmAccentColor.current
@@ -798,7 +800,13 @@ fun DashboardScreen(
                 )
 
                 // Selector Cámara Frontal vs Simulado
-                Row(
+                if (nodeMode != NodeMode.TELEFONO) {
+                    Text(
+                        text = if (nodeMode == NodeMode.ESP32_FISICO) "Sensor físico (ESP32) · ZN-05" else "ESP32 Wokwi · ZN-05",
+                        color = TextSecondary,
+                        fontSize = 12.sp
+                    )
+                } else Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clip(RoundedCornerShape(8.dp))

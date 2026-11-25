@@ -1,19 +1,65 @@
 // Perimetral: nodo ESP32 de la alarma de bodega.
 // PIR de movimiento + reed switch de puerta -> eventos por MQTT.
 // La app (panel) decide si hay alarma y publica el estado; el ESP32 maneja sirena y estrobo.
-// Sirve igual en Wokwi (red Wokwi-GUEST) y en un ESP32 físico (cambiar WIFI_SSID/WIFI_PASS).
+// Sirve igual en Wokwi (red Wokwi-GUEST) y en un ESP32 físico (cambiar WIFI_SSID/WIFI_PASS en secrets.h).
 
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
+#include "secrets.h"  // WIFI_SSID, WIFI_PASS, MQTT_HOST, MQTT_USER, MQTT_PASS (ver secrets.example.h)
 
 // --- Configuración ---
-const char* WIFI_SSID = "Wokwi-GUEST";   // ESP32 físico: SSID de la red de la bodega
-const char* WIFI_PASS = "";
-const char* MQTT_HOST = "broker.hivemq.com";
-const uint16_t MQTT_PORT = 1883;
+const uint16_t MQTT_PORT = 8883;  // MQTT sobre TLS (EMQX Cloud Serverless)
 // Debe coincidir con el "Canal" que se ingresa en la app al elegir el nodo ESP32.
 const char* CANAL = "perimetral/a2b39e2e";
+
+// DigiCert Global Root G2: CA raíz pública que firma el certificado de EMQX Cloud (no es un secreto).
+const char* CA_BROKER =
+"-----BEGIN CERTIFICATE-----
+"
+"MIIDjjCCAnagAwIBAgIQAzrx5qcRqaC7KGSxHQn65TANBgkqhkiG9w0BAQsFADBh
+"
+"MQswCQYDVQQGEwJVUzEVMBMGA1UEChMMRGlnaUNlcnQgSW5jMRkwFwYDVQQLExB3
+"
+"d3cuZGlnaWNlcnQuY29tMSAwHgYDVQQDExdEaWdpQ2VydCBHbG9iYWwgUm9vdCBH
+"
+"MjAeFw0xMzA4MDExMjAwMDBaFw0zODAxMTUxMjAwMDBaMGExCzAJBgNVBAYTAlVT
+"
+"MRUwEwYDVQQKEwxEaWdpQ2VydCBJbmMxGTAXBgNVBAsTEHd3dy5kaWdpY2VydC5j
+"
+"b20xIDAeBgNVBAMTF0RpZ2lDZXJ0IEdsb2JhbCBSb290IEcyMIIBIjANBgkqhkiG
+"
+"9w0BAQEFAAOCAQ8AMIIBCgKCAQEAuzfNNNx7a8myaJCtSnX/RrohCgiN9RlUyfuI
+"
+"2/Ou8jqJkTx65qsGGmvPrC3oXgkkRLpimn7Wo6h+4FR1IAWsULecYxpsMNzaHxmx
+"
+"1x7e/dfgy5SDN67sH0NO3Xss0r0upS/kqbitOtSZpLYl6ZtrAGCSYP9PIUkY92eQ
+"
+"q2EGnI/yuum06ZIya7XzV+hdG82MHauVBJVJ8zUtluNJbd134/tJS7SsVQepj5Wz
+"
+"tCO7TG1F8PapspUwtP1MVYwnSlcUfIKdzXOS0xZKBgyMUNGPHgm+F6HmIcr9g+UQ
+"
+"vIOlCsRnKPZzFBQ9RnbDhxSJITRNrw9FDKZJobq7nMWxM4MphQIDAQABo0IwQDAP
+"
+"BgNVHRMBAf8EBTADAQH/MA4GA1UdDwEB/wQEAwIBhjAdBgNVHQ4EFgQUTiJUIBiV
+"
+"5uNu5g/6+rkS7QYXjzkwDQYJKoZIhvcNAQELBQADggEBAGBnKJRvDkhj6zHd6mcY
+"
+"1Yl9PMWLSn/pvtsrF9+wX3N3KjITOYFnQoQj8kVnNeyIv/iPsGEMNKSuIEyExtv4
+"
+"NeF22d+mQrvHRAiGfzZ0JFrabA0UWTW98kndth/Jsw1HKj2ZL7tcu7XUIOGZX1NG
+"
+"Fdtom/DzMNU+MeKNhJ7jitralj41E6Vf8PlwUHBHQRFXGU7Aj64GxJUTFy8bJZ91
+"
+"8rGOmaFvE7FBcf6IKshPECBV1/MUReXgRPTqh5Uykw7+U0b6LJ3/iyK5S9kJRaTe
+"
+"pLiaWN0bfVKfjllDiIGknibVb63dDcY3fe0Dkhvld1927jyNxF1WW6LZZm6zNTfl
+"
+"MrY=
+"
+"-----END CERTIFICATE-----
+";
 
 // --- Pines ---
 const int PIN_PIR = 27;      // salida del sensor PIR (HIGH = movimiento)
@@ -28,7 +74,7 @@ const unsigned long ANTIRREBOTE_MS = 80;
 const unsigned long ESTROBO_MS = 120;        // medio periodo del destello
 const unsigned long LATIDO_MS = 15000;       // reenvía el estado de los sensores
 
-WiFiClient red;
+WiFiClientSecure red;
 PubSubClient mqtt(red);
 String tEvento, tSensores, tNodo, tEstado;
 
@@ -87,7 +133,7 @@ void conectarMqtt() {
     String id = "perimetral-esp32-" + String((uint32_t)ESP.getEfuseMac(), HEX);
     Serial.print("Conectando a MQTT... ");
     // Última voluntad: si se corta, el broker publica "offline" en el tema del nodo.
-    if (mqtt.connect(id.c_str(), tNodo.c_str(), 1, true, "offline")) {
+    if (mqtt.connect(id.c_str(), MQTT_USER, MQTT_PASS, tNodo.c_str(), 1, true, "offline")) {
       Serial.println("OK");
       mqtt.publish(tNodo.c_str(), "online", true);
       mqtt.subscribe(tEstado.c_str(), 1);
@@ -160,6 +206,7 @@ void setup() {
   lecturaReed = puertaPrevia = digitalRead(PIN_REED) == HIGH;
 
   conectarWifi();
+  red.setCACert(CA_BROKER);
   mqtt.setServer(MQTT_HOST, MQTT_PORT);
   mqtt.setCallback(alRecibir);
   mqtt.setBufferSize(512);
