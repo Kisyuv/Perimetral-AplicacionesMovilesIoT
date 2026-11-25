@@ -41,6 +41,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Sube lo que quedó pendiente en la sesión anterior (aquí y no en Application: Firebase ya está listo
+        // y los tests de Robolectric, que no abren la Activity, no necesitan Firestore).
+        (application as PerimetralApplication).container.siteAlarmRepository.enqueueSync()
         enableEdgeToEdge()
 
         val appContainer = (application as PerimetralApplication).container

@@ -1,5 +1,14 @@
 package com.example.data.repository
 
+import android.content.Context
+import androidx.work.Constraints
+import androidx.work.ExistingWorkPolicy
+import androidx.work.NetworkType
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkManager
+import com.example.data.local.PendingEvent
+import com.example.data.local.PendingEventDao
+import com.example.data.local.SyncEventsWorker
 import com.example.data.model.SecurityEvent
 import com.example.data.model.SiteAlarmState
 import com.example.data.model.SiteCameraConfig
@@ -10,6 +19,7 @@ import android.util.Log
 import com.google.android.gms.tasks.Task
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FieldValue
+import com.google.firebase.firestore.FirebaseFirestoreException
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.Query
 import kotlinx.coroutines.CoroutineScope
@@ -23,12 +33,16 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.withTimeout
+import java.util.UUID
 import java.util.Calendar
 
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class SiteAlarmRepository(
     private val firestore: FirebaseFirestore,
-    private val auth: FirebaseAuth
+    private val auth: FirebaseAuth,
+    private val context: Context,
+    private val pendingEvents: PendingEventDao
 ) {
 
     /**
@@ -435,21 +449,59 @@ class SiteAlarmRepository(
      * Con eventId (el id del comando) el mismo evento escrito por panel y nodo queda en un único
      * documento, aunque el comando llegue por la nube y por el enlace local.
      */
-    suspend fun logEvent(siteId: String = "bodega_central", tipo: String, detalle: String, origen: String, eventId: String? = null) {
+    suspend fun logEvent(siteId: String = "bodega_central", tipo: String, detalle: String, origen: String, eventId: String? = null, timestamp: Long = System.currentTimeMillis()) {
         try {
-            val eventPayload = mapOf(
-                "tipo" to tipo,
-                "detalle" to detalle,
-                "origen" to origen,
-                "timestamp" to System.currentTimeMillis()
+            // Primero a Room: el evento sobrevive sin red o con la app cerrada, y el Worker lo sube después.
+            pendingEvents.insert(
+                PendingEvent(eventId ?: UUID.randomUUID().toString(), siteId, tipo, detalle, origen, timestamp)
             )
-            val eventos = firestore.collection("sitios").document(siteId).collection("eventos")
-            if (eventId != null) {
-                eventos.document(eventId).set(eventPayload).logFailure("evento $tipo")
-            } else {
-                eventos.add(eventPayload).logFailure("evento $tipo")
+            enqueueSync()
+        } catch (e: Exception) {
+            Log.w("SiteAlarmRepo", "No se pudo guardar el evento $tipo: ${e.message}")
+        }
+    }
+
+    /**
+     * Encola la subida de pendientes; se ejecuta en cuanto haya red. Seguro llamarlo varias veces.
+     * REPLACE: un trabajo nuevo reemplaza al que espera un reintento (con APPEND quedaría detrás de su espera
+     * creciente, que llega a horas). Cortar una subida en curso no pierde nada: se borra de Room solo tras confirmar.
+     */
+    fun enqueueSync() {
+        val request = OneTimeWorkRequestBuilder<SyncEventsWorker>()
+            .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+            .build()
+        WorkManager.getInstance(context).enqueueUniqueWork("sync-eventos", ExistingWorkPolicy.REPLACE, request)
+    }
+
+    /**
+     * Sube los pendientes con `document(id).set(...)` (idempotente) y los borra de Room.
+     * Aquí sí se espera la confirmación del servidor: borrar antes perdería el evento si la subida falla.
+     * Devuelve false si falta algo por subir, para que WorkManager reintente con espera creciente.
+     */
+    suspend fun syncPendingEvents(): Boolean {
+        if (auth.currentUser == null) return false
+        for (e in pendingEvents.all()) {
+            try {
+                val payload = mapOf("tipo" to e.tipo, "detalle" to e.detalle, "origen" to e.origen, "timestamp" to e.timestamp)
+                withTimeout(20_000) {
+                    firestore.collection("sitios").document(e.siteId).collection("eventos").document(e.id).set(payload).await()
+                }
+                pendingEvents.delete(e.id)
+            } catch (ex: FirebaseFirestoreException) {
+                if (ex.code != FirebaseFirestoreException.Code.PERMISSION_DENIED) {
+                    Log.w("SiteAlarmRepo", "No se pudo subir el evento ${e.id}: ${ex.message}")
+                    return false
+                }
+                // Las reglas solo permiten crear eventos: el documento ya existe (otro panel lo subió o una subida
+                // anterior sí llegó) o el evento no es válido. Reintentar no sirve y bloquearía la cola.
+                Log.w("SiteAlarmRepo", "Evento ${e.id} rechazado por las reglas (ya existe o no es válido); se descarta")
+                pendingEvents.delete(e.id)
+            } catch (ex: Exception) {
+                Log.w("SiteAlarmRepo", "No se pudo subir el evento ${e.id}: ${ex.message}")
+                return false
             }
-        } catch (_: Exception) {}
+        }
+        return true
     }
 
     fun setZoneActive(siteId: String = "bodega_central", zoneId: String, active: Boolean, origen: String, eventId: String? = null) {

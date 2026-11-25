@@ -18,6 +18,6 @@ local.properties
 debug.keystore
 app/google-services.json
 
-hardware/esp32-bodega/secrets.h
+hardware/esp32-bodega/**/secrets.h
 __pycache__/
 build.log

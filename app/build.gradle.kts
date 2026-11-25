@@ -28,6 +28,10 @@ android {
     buildConfigField("String", "MQTT_HOST", mqttProp("mqtt.host"))
     buildConfigField("String", "MQTT_USER", mqttProp("mqtt.user"))
     buildConfigField("String", "MQTT_PASSWORD", mqttProp("mqtt.password"))
+    // Canal por defecto del nodo ESP32 (mqtt.channel en local.properties), igual que el CANAL de secrets.h.
+    buildConfigField("String", "MQTT_CHANNEL", mqttProp("mqtt.channel"))
+    // ABIs de las librerías nativas que se empaquetan (ARM de móviles + x86_64 de emuladores/Waydroid).
+    ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64") }
 
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
@@ -113,8 +117,9 @@ dependencies {
   implementation(libs.androidx.lifecycle.runtime.ktx)
   implementation(libs.androidx.lifecycle.viewmodel.compose)
   implementation(libs.androidx.navigation.compose)
-  // implementation(libs.androidx.room.ktx)
-  // implementation(libs.androidx.room.runtime)
+  implementation(libs.androidx.room.ktx)
+  implementation(libs.androidx.room.runtime)
+  implementation(libs.androidx.work.runtime.ktx)
   // implementation(libs.coil.compose)
   implementation(libs.converter.moshi)
   implementation(libs.firebase.ai)
@@ -149,6 +154,6 @@ dependencies {
   androidTestImplementation(libs.androidx.runner)
   debugImplementation(libs.androidx.compose.ui.test.manifest)
   debugImplementation(libs.androidx.compose.ui.tooling)
-  // "ksp"(libs.androidx.room.compiler)
+  "ksp"(libs.androidx.room.compiler)
   "ksp"(libs.moshi.kotlin.codegen)
 }

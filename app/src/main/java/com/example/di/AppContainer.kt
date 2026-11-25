@@ -1,6 +1,8 @@
 package com.example.di
 
 import android.content.Context
+import androidx.room.Room
+import com.example.data.local.PendingEventDb
 import com.example.actuators.AlarmActuatorManager
 import com.example.data.remote.DeviceManager
 import com.example.data.remote.FirebaseDataSource
@@ -60,6 +62,10 @@ class DefaultAppContainer(private val context: Context) : AppContainer {
         FirestoreConfig.createFirestoreInstance(context)
     }
 
+    private val pendingEventDb by lazy {
+        Room.databaseBuilder(context, PendingEventDb::class.java, "perimetral.db").build()
+    }
+
     override val firebaseAuth: FirebaseAuth by lazy {
         FirebaseAuth.getInstance()
     }
@@ -89,7 +95,7 @@ class DefaultAppContainer(private val context: Context) : AppContainer {
     }
 
     override val siteAlarmRepository: SiteAlarmRepository by lazy {
-        SiteAlarmRepository(firestore, firebaseAuth)
+        SiteAlarmRepository(firestore, firebaseAuth, context, pendingEventDb.pendingEvents())
     }
 
     override val esp32MqttBridge: Esp32MqttBridge by lazy {

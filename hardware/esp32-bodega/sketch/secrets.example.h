@@ -5,3 +5,4 @@
 #define MQTT_HOST "xxxxxxxx.ala.us-east-1.emqxsl.com"  // host del deployment EMQX Cloud
 #define MQTT_USER "usuario-mqtt"
 #define MQTT_PASS "contraseña-mqtt"
+#define CANAL "perimetral/CAMBIAR-por-un-canal-propio"  // debe ser igual al "Canal MQTT" de la app (mqtt.channel en local.properties)

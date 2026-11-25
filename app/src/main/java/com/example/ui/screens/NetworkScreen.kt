@@ -65,6 +65,9 @@ import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 import java.net.Inet4Address
 import java.net.NetworkInterface
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @Composable
 fun NetworkScreen(
@@ -286,6 +289,10 @@ fun NetworkScreen(
                         NetworkInfoRow("PIR", if (esp32.pir) "Movimiento" else "Sin movimiento")
                         NetworkInfoRow("Puerta", if (esp32.puerta) "Abierta" else "Cerrada")
                         esp32.rssi?.let { NetworkInfoRow("Señal WiFi", "$it dBm") }
+                        esp32.ultimoAck?.let {
+                            val hora = SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(it.horaMs))
+                            NetworkInfoRow("Última orden", (if (it.ok) "ACK" else "ERR ${it.motivo}") + " · $hora")
+                        }
                     }
                 }
             }

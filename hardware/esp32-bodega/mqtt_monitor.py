@@ -11,13 +11,14 @@ import argparse
 import json
 import os
 import time
+import uuid
 
 import paho.mqtt.client as mqtt
 
-# Mismos valores que MQTT_HOST/MQTT_USER/MQTT_PASS de secrets.h, por variables de entorno.
+# Mismos valores que MQTT_HOST/MQTT_USER/MQTT_PASS/CANAL de secrets.h, por variables de entorno.
 BROKER = os.environ["MQTT_HOST"]
 PUERTO = 8883
-CANAL = "perimetral/a2b39e2e"  # debe coincidir con CANAL del sketch y el "Canal MQTT" de la app
+CANAL = os.environ["MQTT_CANAL"]  # debe coincidir con CANAL de secrets.h y el "Canal MQTT" de la app
 
 
 def mostrar(_cliente, _datos, msg):
@@ -39,7 +40,7 @@ def main():
 
     if args.estado:
         alarma = args.estado == "alarma"
-        carga = json.dumps({"estado": args.estado, "sirena": alarma, "estrobo": alarma})
+        carga = json.dumps({"id": str(uuid.uuid4()), "estado": args.estado, "sirena": alarma, "estrobo": alarma})
         time.sleep(2)
         c.publish(f"{CANAL}/estado", carga, qos=1, retain=True)
         print(f"Publicado en {CANAL}/estado: {carga}")
