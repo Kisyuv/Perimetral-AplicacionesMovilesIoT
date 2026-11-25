@@ -2,7 +2,7 @@
 
 - Proyecto: Perimetral, alarma perimetral para bodega.
 - Ramo: TI3042 (unidad 3).
-- Integrantes: <!-- Brandon Moya, Benjamin Villa, Josue Vasquez-->
+- Integrantes: <-- Brandon Moya, Benjamin Villa, Josue Vasquez-->
 
 Perimetral detecta intrusos fuera de horario con un sensor de movimiento (PIR HC-SR501) y un sensor de puerta (reed), y activa una sirena y una luz estroboscópica. Tiene una app Android (Kotlin, Jetpack Compose y Firebase/Firestore) y un nodo ESP32 que se comunica con la app por MQTT sobre TLS.
 
