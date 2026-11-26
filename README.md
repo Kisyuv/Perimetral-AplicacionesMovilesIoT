@@ -166,6 +166,7 @@ Decisiones para ahorrar energía: la app recibe por MQTT sin sondear y reintenta
 | Dispositivo | Android | Arquitectura | Resultado |
 |---|---|---|---|
 | Samsung Galaxy SM-S936B | 17 (One UI 9) | arm64-v8a | Funciona |
+| Samsung Galaxy SM-S731B | 16 (One UI 8) | arm64-v8a | Funciona |
 | Waydroid (LineageOS) en PC | 13 | x86_64 | Funciona |
 
 ## 10. Cómo compilar y ejecutar
