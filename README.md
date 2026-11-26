@@ -1,16 +1,18 @@
+# Perimetral
+
 ## 1. Datos del proyecto
 
-- Ramo: TI3042, unidad 3.
-- Integrantes: Brandon Moya, Benjamin Villa, Josue Vasquez.
-- Sistema: alarma para bodega. Un nodo ESP32 con sensor de movimiento (PIR HC-SR501), sensor de puerta (reed), sirena y estrobo, y una app Android (Kotlin, Jetpack Compose, Firebase) que lo arma, lo desarma y recibe sus eventos por MQTT sobre TLS.
-
-| Qué | Dónde |
+| | |
 |---|---|
-| App Android | `app/` |
-| Puente MQTT de la app | `app/src/main/java/com/example/network/Esp32MqttBridge.kt` |
-| Firmware y circuito del ESP32 | `hardware/esp32-bodega/` (`sketch/sketch.ino`, `secrets.example.h`, `diagram.json`, `libraries.txt`) |
-| Monitor MQTT para el PC | `hardware/esp32-bodega/mqtt_monitor.py` |
-| APK | Releases de GitHub |
+| Integrantes | Brandon Moya · Benjamin Villa · Josue Vasquez |
+| Ramo | Aplicaciones Móviles para IoT (TI3042) |
+| Sección | D-FB50-N4-P13-C1(E-F)/D, San Pedro de la Paz |
+| Problema que resuelve | Una bodega queda sin vigilancia fuera de horario y nadie se entera de una intrusión hasta el día siguiente |
+| Qué hace el sistema | Detecta movimiento y apertura de puerta con el sistema armado, activa sirena y estrobo, y avisa en la app, que arma, desarma y guarda los eventos |
+| Placa | ESP32 DevKit con módulo ESP32-WROOM-32 |
+| Sensores | PIR HC-SR501 (movimiento), reed de puerta (en el montaje, un botón) |
+| Actuadores | Sirena (buzzer, GPIO25), LED de estrobo, LED de sistema armado |
+| Enlace | WiFi, MQTT sobre TLS (broker EMQX Cloud Serverless, puerto 8883) |
 
 ## 2. Esquema de conexiones
 
@@ -20,174 +22,169 @@
 |---|---|
 | ![Montaje: ESP32, PIR, botón de puerta, LED rojo de estrobo y LED verde de armado](docs/evidencia/montaje-vista-general.jpg) | ![ESP32 en la protoboard, alimentado por USB-C](docs/evidencia/montaje-esp32-usbc.jpg) |
 
-| GPIO | Componente | Dirección | Detalle |
-|---|---|---|---|
-| 27 | PIR HC-SR501 (OUT) | Entrada | HIGH = movimiento. Alimentado con 5 V |
-| 26 | Reed de puerta (en el montaje, un botón) | Entrada, pull-up interno | LOW = puerta cerrada. Antirrebote de 80 ms |
-| 25 | Sirena | Salida | `tone()` alterna 1200 y 1800 Hz cada 400 ms. Sin buzzer en el montaje (sección 10) |
-| 33 | LED de estrobo, 220 ohm | Salida | Parpadea cada 120 ms durante la alarma |
-| 32 | LED de armado, 220 ohm | Salida | Encendido si el estado no es `desarmada` |
+| Pin ESP32 | Componente | Observación |
+|---|---|---|
+| GPIO27 | PIR HC-SR501 (OUT) | Entrada. HIGH = movimiento. Módulo alimentado con 5 V |
+| GPIO26 | Reed de puerta (botón en el montaje) | Entrada con pull-up interno, otro lado a GND. LOW = cerrada. Antirrebote de 80 ms |
+| GPIO25 | Sirena | Salida. `tone()` alterna 1200 y 1800 Hz cada 400 ms. Sin buzzer en el montaje (sección 11) |
+| GPIO33 | LED de estrobo | Salida, resistencia de 220 ohm. Parpadea cada 120 ms |
+| GPIO32 | LED de sistema armado | Salida, resistencia de 220 ohm. Encendido si el estado no es `desarmada` |
 
-El circuito editable está en `hardware/esp32-bodega/diagram.json`. En Wokwi el reed es un interruptor deslizante (izquierda = cerrada).
+El circuito editable está en `hardware/esp32-bodega/diagram.json` (Wokwi).
 
-En el video se arma desde la app (LED verde), se pulsa el botón de puerta, la app pasa a alarma con el estrobo parpadeando y luego se desarma:
+Prueba en el montaje: se arma desde la app (LED verde), se pulsa el botón de puerta, la app pasa a alarma con el estrobo parpadeando y luego se desarma. [Video en MP4](docs/evidencia/prueba-alarma-fisica.mp4).
 
-<a href="docs/evidencia/prueba-alarma-fisica.mp4"><img src="docs/evidencia/prueba-alarma-fisica.jpg" width="270" alt="Prueba en el nodo físico: armado, alarma por el botón de puerta y desarmado. Clic para ver el video"></a>
+![Prueba en el nodo físico: armado, alarma por el botón de puerta y desarmado](docs/evidencia/prueba-alarma-fisica.gif)
 
-## 3. Protocolo
+## 3. Protocolo de comunicación
 
-MQTT sobre TLS (puerto 8883) en EMQX Cloud Serverless. Los temas cuelgan de `<canal>`, que debe ser igual en `CANAL` del sketch, `mqtt.channel` de la app y `MQTT_CANAL` del monitor.
+Formato de trama: JSON sobre MQTT, un mensaje por tema bajo `<canal>/`. El canal debe ser igual en `CANAL` del sketch, `mqtt.channel` de la app y `MQTT_CANAL` del monitor. Largo máximo: 512 bytes (`mqtt.setBufferSize(512)`). Una trama incompleta o corrupta se descarta sin tocar los actuadores y el ESP32 responde ERR con `json_invalido`.
 
-| Tema | Sentido | Retenido | Contenido |
-|---|---|---|---|
-| `<canal>/estado` | app → nodo | sí, QoS 1 | `{"id":"<UUID, 1 a 36 caracteres>","estado":"desarmada"\|"armada"\|"alarma","sirena":bool,"estrobo":bool}` |
-| `<canal>/ack` | nodo → app | no | `{"id","ok":bool,"motivo","ts"}`. `motivo` solo si `ok` es false |
-| `<canal>/evento` | nodo → app | no | `{"sensor":"pir"\|"reed","detalle","ms","ts","id"}` |
-| `<canal>/sensores` | nodo → app | sí, cada 15 s | `{"pir","puerta","rssi","ts"}` |
-| `<canal>/nodo` | nodo → app | sí, última voluntad | `online` / `offline` |
+| Dirección | Tema | Parámetros | Rango válido | Respuesta |
+|---|---|---|---|---|
+| App → ESP32 | `<canal>/estado` (retenido, QoS 1) | `id`, `estado`, `sirena`, `estrobo` | `id`: texto de 1 a 36 caracteres. `estado`: `desarmada`, `armada` o `alarma`. `sirena`, `estrobo`: bool. Sin claves extra | `<canal>/ack` con `{"id","ok":true,"ts"}` o `{"id","ok":false,"motivo","ts"}` |
+| ESP32 → App | `<canal>/evento` | `sensor`, `detalle`, `ms`, `ts`, `id` | `sensor`: `pir` o `reed` | La app lo guarda como evento y dispara la alarma si el sistema está armado y la zona activa |
+| ESP32 → App | `<canal>/sensores` (retenido, cada 15 s) | `pir`, `puerta`, `rssi`, `ts` | bool, bool, dBm | La app lo muestra en la pantalla Red |
+| ESP32 → App | `<canal>/nodo` (retenido, última voluntad) | texto | `online` / `offline` | La app muestra el ESP32 en línea o fuera de línea |
 
-`ts` es epoch UTC en segundos por NTP (0 si aún no sincroniza).
+`ts` es epoch UTC en segundos por NTP (0 si aún no sincroniza). `ms` son los milisegundos desde el arranque.
 
-| Motivo de ERR | Cuándo |
-|---|---|
-| `json_invalido` | No se puede parsear |
-| `no_es_objeto` | JSON válido pero no es un objeto |
-| `clave_desconocida` | Trae una clave fuera del protocolo |
-| `campo_faltante` | Falta `id`, `estado`, `sirena` o `estrobo` |
-| `tipo_incorrecto` | Un campo tiene otro tipo |
-| `id_invalido` | `id` vacío o de más de 36 caracteres |
-| `estado_invalido` | `estado` no es `desarmada`, `armada` ni `alarma` |
+Códigos de error: `json_invalido` (no se puede parsear), `no_es_objeto`, `clave_desconocida`, `campo_faltante`, `tipo_incorrecto`, `id_invalido` (vacío o de más de 36 caracteres), `estado_invalido`.
 
-La app muestra el último ACK o ERR en la pantalla Red y en la lista de eventos.
-
-Pruebas contra el ESP32 físico, publicando en `<canal>/estado` y midiendo el tiempo hasta el ACK:
+Pruebas contra el ESP32 físico:
 
 | Prueba | Resultado |
 |---|---|
 | 10 órdenes válidas, una a la vez | 10/10 `ok:true`. ACK entre 394 y 3089 ms, promedio 849 ms |
-| Un mensaje inválido por motivo, seguido de una orden válida | Cada uno respondió con su motivo y no cambió el estado. La orden válida siguiente se aceptó siempre |
+| Un mensaje inválido por cada código, seguido de una orden válida | Cada uno respondió con su código y no cambió el estado. La orden válida siguiente se aceptó siempre |
 | 10 órdenes seguidas sin esperar ACK | 10 ACK `ok:true`, en orden |
-| 65 s leyendo `<canal>/sensores` | 12 mensajes. `ts` a 0 a 3 s de la hora del PC. RSSI entre −49 y −62 dBm |
 
 ## 4. Seguridad
 
-Controles de ISO/IEC 27001:2022, Anexo A:
+| # | Control | Cómo está aplicado (archivo/línea) | Cómo lo comprobaron |
+|---|---|---|---|
+| 1 | Cifrado TLS con CA fijada (ISO/IEC 27001 A.8.24) | `sketch.ino`: `MQTT_PORT` 8883 y `red.setCACert(CA_BROKER)` en `setup()` (DigiCert Global Root G2). App: Paho con `SSLSocketFactory`, que valida cadena y host (`Esp32MqttBridge.kt`) | Wireshark: por el 1883 se leía el JSON, por el 8883 solo el handshake TLS |
+| 2 | Autenticación en el broker y validación de órdenes (A.5.17) | Usuario y clave propios en EMQX. El ESP32 valida cada orden en `validarOrden()` con lista blanca de claves y tipos antes de actuar | El broker rechaza una conexión con clave errónea o sin credenciales. Las órdenes inválidas responden ERR y no cambian el estado (sección 3) |
 
-| Control | Qué se aplicó | Evidencia |
-|---|---|---|
-| A.8.24 Uso de criptografía | MQTT por TLS en el 8883. El ESP32 fija la CA del broker (DigiCert Global Root G2, `red.setCACert(CA_BROKER)`) y rechaza certificados de otra autoridad. La app (Paho con `SSLSocketFactory`) valida la cadena y el host | En Wireshark, por el 1883 se leía el JSON; por el 8883 solo el handshake TLS |
-| A.5.17 Información de autenticación | Usuario, clave del broker y canal fuera del repo: `secrets.h` en el firmware y `local.properties` en la app. El repo solo trae `secrets.example.h` | `git check-ignore -v hardware/esp32-bodega/sketch/secrets.h local.properties` los lista y `git ls-files` no los incluye. El broker rechaza una conexión con clave errónea |
+Qué quedaría expuesto sin estos controles: sin TLS, cualquiera en la misma red o en el trayecto leería los eventos y el canal. Sin credenciales ni validación, un tercero podría publicar en `<canal>/estado` y desarmar la alarma o apagar la sirena.
 
-Además, el ESP32 valida cada orden con `validarOrden()` antes de tocar los actuadores: lista blanca de claves, tipos obligatorios, `id` de 1 a 36 caracteres y tres estados posibles. Una orden inválida se descarta y se responde con ERR (pruebas en la sección 3).
+Manejo de credenciales: la clave WiFi, el usuario y la clave del broker y el canal están en `hardware/esp32-bodega/sketch/secrets.h` y en `local.properties` de la app, ambos fuera de Git (`.gitignore`). El repositorio trae `secrets.example.h` con valores falsos.
 
-### Qué quedaría expuesto
+Alineación con ISO 27000: un solo usuario de broker para el sistema, solo el puerto TLS 8883, sin puertos abiertos en el ESP32 (solo cliente saliente) y órdenes aceptadas únicamente si cumplen el formato.
 
-- Quien conozca el canal y tenga credenciales del broker puede leer eventos y publicar estados. App y nodo comparten credenciales.
-- Los mensajes no van firmados: el broker los ve en claro y un cliente con credenciales puede enviar una orden válida.
-- La clave WiFi y las credenciales del broker están sin cifrar en la flash del ESP32. Con el equipo y un cable USB se pueden leer.
-- El enlace LAN entre teléfonos usa AES-GCM con una clave compartida por todos los dispositivos del usuario.
+Limitaciones: app y nodo comparten credenciales, los mensajes no van firmados y las credenciales quedan sin cifrar en la flash del ESP32.
 
 ## 5. Datos personales
 
-| Dato | Dónde viaja o se guarda | Protección |
-|---|---|---|
-| Correo y UID | Firebase Auth y `users/{uid}` en Firestore | TLS. Solo el dueño lee y escribe su documento |
-| Token FCM | `users/{uid}/dispositivos/{deviceId}`, con rol, modelo y última conexión | TLS |
-| Eventos (tipo, detalle, origen, hora) | MQTT, Room si no hay red y `sitios/{id}/eventos` | TLS. Las reglas impiden editarlos o borrarlos. No llevan nombre ni correo |
-| Ubicación y `NEARBY_WIFI_DEVICES` | Se piden al abrir la app para leer el SSID | El SSID no sale del teléfono |
-| Cámara (nodo-teléfono) | Análisis en el teléfono | No se guardan ni envían imágenes |
+| Dato | ¿Viaja por el enlace? | ¿Se guarda? ¿Dónde? | Cómo se protege |
+|---|---|---|---|
+| Correo y UID del usuario | No (solo app ↔ Firebase) | Firebase Auth y `users/{uid}` en Firestore | TLS. Solo el dueño lee y escribe su documento |
+| Token de notificaciones (FCM) | No | `users/{uid}/dispositivos/{deviceId}` | TLS. Solo el dueño |
+| Eventos de la alarma (tipo, hora) | Sí, por MQTT | Room en el teléfono si no hay red, y Firestore | TLS. No llevan nombre ni correo. Las reglas impiden editarlos o borrarlos |
+| SSID de la WiFi (pide permiso de ubicación) | No | No | Solo se muestra en la app |
 
-El ESP32 no maneja datos personales. La app no hace analítica.
+El ESP32 no maneja datos personales: publica estados de sensores y eventos con un `id` aleatorio.
 
 ## 6. Reconexión y plan de contingencia
 
-- Firmware, sin bloquear el sensado: WiFi cada 4, 8, 16… s y MQTT cada 1, 2, 4… s, con tope de 60 s. Keepalive de 15 s. Al perder el WiFi corta la sesión MQTT.
-- Última voluntad: el broker publica `offline` en `<canal>/nodo` si el nodo cae, y el nodo publica `online` al volver.
-- App: reintenta cada 1 s doblando hasta 60 s, luego Paho reconecta solo y la app republica el estado.
+Reconexión automática en la app: espera inicial de 1 s, crece x2 hasta un tope de 60 s. Reinicia la cuenta al conectar. Después Paho reconecta solo y la app vuelve a publicar el estado. El ESP32 hace lo mismo con MQTT (1 s a 60 s) y con el WiFi (4 s a 60 s), sin bloquear el sensado.
 
-| Falla | Qué pasa | Qué hace el usuario |
-|---|---|---|
-| Cae el WiFi de la bodega | El ESP32 sigue con el último estado y guarda los eventos en flash | Revisar el router. Al volver la red reenvía solo |
-| Cae el broker | Se marca `offline`. El nodo sigue igual y la app reintenta | Esperar o revisar el deployment en EMQX Cloud |
-| Corte de luz del ESP32 | Al arrancar recibe el último `estado` retenido. Los eventos en flash se conservan | Ver que el LED de armado coincida con la app |
-| Teléfono sin internet | Los eventos quedan en Room y se suben al volver la red | Reconectar el teléfono. En modo ESP32 la app necesita internet para el broker |
+Estados visibles en la pantalla Red: Broker "Conectado" / "Sin conexión", ESP32 "En línea" / "Fuera de línea", y la última orden con ACK o ERR y su hora.
+
+| Falla | Qué detecta el sistema y cómo | Qué hace | Cómo se recupera |
+|---|---|---|---|
+| Se pierde el enlace app–ESP32 | Keepalive MQTT de 15 s. El broker publica `offline` (última voluntad) | El ESP32 mantiene el último estado y guarda los eventos en flash. La app muestra el ESP32 fuera de línea | Reconecta sola y reenvía los eventos guardados |
+| El ESP32 se apaga o reinicia | La app ve `offline` en `<canal>/nodo` | Al arrancar sincroniza NTP y recibe el último `estado` retenido | Vuelve al estado armado o desarmado que tenía. Los eventos en flash se conservan |
+| La app se cierra o se cae | El ESP32 no depende de la app | Sigue sensando y actuando con el último estado | Al abrir, la app reconecta y recibe los temas retenidos |
+| Sensor entrega datos inválidos | Antirrebote de 80 ms en la puerta y rearme de 3 s en el PIR | Ignora los rebotes y las repeticiones | No detecta un sensor atascado (sección 11) |
+| Teléfono sin internet | La app no alcanza Firestore | Guarda los eventos en Room | `SyncEventsWorker` los sube al volver la red |
+
+Estado seguro del actuador: ante cualquier corte el ESP32 conserva el último estado recibido. Si estaba en alarma, la sirena y el estrobo siguen hasta que llegue la orden de desarmar.
 
 Prueba: se expulsó al nodo del broker con un cliente que usó su mismo id. Se marcó `offline` y el nodo volvió a `online` a los 21,3 s. El primer ACK tras reconectar tardó 3,6 s.
 
-## 7. Almacenamiento temporal
+## 7. Almacenamiento temporal sin conexión
 
-### App
+En la app (Room): los eventos sin subir quedan en la tabla `eventos_pendientes`. Estar en la tabla es la marca de no sincronizado. `SyncEventsWorker` (WorkManager, solo con red) los sube a Firestore con `document(id).set()` y los borra de Room cuando el servidor confirma. El id del evento es la clave primaria y la inserción es `IGNORE`, así que no hay duplicados. Si un envío falla, el evento sigue en la tabla.
 
-- Room, tabla `eventos_pendientes`, con el id del evento como clave e inserción `IGNORE`, así que no hay duplicados.
-- WorkManager (`SyncEventsWorker`) corre solo con red, sube cada evento con `document(id).set()` y lo borra de Room cuando el servidor confirma. Si Firestore lo rechaza por `PERMISSION_DENIED`, lo descarta para no bloquear la cola.
+En el ESP32 (flash):
 
-### ESP32 (flash, LittleFS)
-
-- Guarda eventos solo mientras no hay MQTT, en `/pend.jsonl` y `/pend_viejo.jsonl`, de hasta 100 eventos cada uno (unos 24 KB en total). Al llenarse se descartan los 100 más antiguos.
-- Sobrevive a reinicios y cortes de luz. Al reconectar reenvía en orden y borra cada archivo solo si el envío salió bien.
-- Escribe una línea por evento, sin reescribir archivos, y LittleFS reparte el desgaste.
-- Con QoS 0 un evento enviado justo antes del corte puede perderse. Por eso, al detectar el corte, los eventos de los últimos 30 s pasan de RAM a flash. Si alguno se duplica, la app lo descarta por id.
-- Un evento que llega con más de 60 s de atraso se guarda con su hora real y no dispara la alarma.
-
-Prueba con el nodo físico: se cortó la red y se generaron eventos con el botón y el PIR. El monitor serie mostró `Sin MQTT: evento guardado en flash` por cada uno, hasta 16. Al volver la red el nodo reconectó, publicó `estado`, `nodo` y `sensores`, y reenvió los eventos, cada uno con su `id` y la hora en que ocurrió.
-
-| Monitor serie | Broker tras reconectar |
+| Dato | Valor |
 |---|---|
-| ![Monitor serie: eventos guardados en flash y reenviados al reconectar](docs/evidencia/buffer-flash-monitor-serie.png) | ![Broker: estado, nodo online y sensores tras la reconexión](docs/evidencia/reconexion-estado-nodo-sensores.png) |
-| ![Broker: eventos PIR y reed reenviados desde la flash](docs/evidencia/eventos-reenviados-1.png) | ![Broker: más eventos reed reenviados desde la flash](docs/evidencia/eventos-reenviados-2.png) |
+| Mecanismo | LittleFS, archivos `/pend.jsonl` y `/pend_viejo.jsonl` |
+| Tamaño de cada lectura | Unos 119 bytes (un evento JSON por línea) |
+| Espacio asignado | Unos 24 KB (2 archivos de 100 eventos) |
+| Lecturas que caben | 200 eventos |
+| Qué pasa cuando se llena | Se borra el archivo viejo (los 100 más antiguos) y el actual pasa a ser el viejo |
+| Cómo se protege la flash del desgaste | Solo escribe sin conexión, agrega una línea por evento sin reescribir el archivo y LittleFS reparte las escrituras |
+| Cómo se vacía al reconectar | Reenvía en orden, primero el archivo viejo, y borra cada archivo solo si el envío salió bien |
 
-## 8. Consumo y compatibilidad
+Como QoS 0 no confirma la entrega, al detectar un corte los eventos de los últimos 30 s pasan de RAM a flash. Si alguno llega dos veces, la app lo descarta por id.
 
-El nodo se alimenta por USB-C (5 V) y no usa batería: tiene que estar siempre en línea con el WiFi activo, y una batería duraría horas o pocos días.
+Prueba con el nodo físico: se cortó la red y se generaron eventos con el botón y el PIR. El monitor serie mostró `Sin MQTT: evento guardado en flash` por cada uno, hasta 16. Al volver la red el nodo reconectó, publicó `estado`, `nodo` y `sensores`, y reenvió los eventos con su `id` y la hora en que ocurrieron.
 
-| Componente | Reposo | Con alarma | Fuente |
+Monitor serie:
+
+![Monitor serie: eventos guardados en flash y reenviados al reconectar](docs/evidencia/buffer-flash-monitor-serie.png)
+
+Broker tras reconectar:
+
+| Estado, nodo y sensores | Eventos reenviados | Eventos reenviados |
+|---|---|---|
+| ![Broker: estado, nodo online y sensores tras la reconexión](docs/evidencia/reconexion-estado-nodo-sensores.png) | ![Broker: eventos PIR y reed reenviados desde la flash](docs/evidencia/eventos-reenviados-1.png) | ![Broker: más eventos reed reenviados desde la flash](docs/evidencia/eventos-reenviados-2.png) |
+
+## 8. Consumo de energía
+
+Alimentación del prototipo: USB-C desde un computador, 5 V, sin batería.
+
+| Componente | Estado | Corriente (mA) | Fuente del dato | % del tiempo en ese estado | Corriente promedio (mA) |
+|---|---|---:|---|---:|---:|
+| ESP32-WROOM-32 | Activo con WiFi | 80 | Datasheet ESP32-WROOM-32 (Espressif), operación promedio | 100 | 80 |
+| PIR HC-SR501 | Midiendo | 0,065 | Dato del proyecto, máximo en reposo | 100 | 0,065 |
+| Reed con pull-up interno | Puerta cerrada | 0,1 | Estimado: 3,3 V sobre unos 45 kohm | 100 | 0,1 |
+| LED de armado | Encendido | 6 | (3,3 V − 2 V) / 220 ohm | 100 | 6 |
+| LED de estrobo | Parpadeando | 6 | Mismo cálculo, promedio | 0 | 0 |
+| Sirena | Sonando | 30 | Valor típico de un buzzer activo | 0 | 0 |
+| **Total** | | | | | **86,2 mA** |
+
+Se supone el sistema armado todo el tiempo y sin alarmas. Con la alarma sonando el total sube a 122,2 mA.
+
+Si el proyecto no va a batería: el nodo tiene que estar siempre en línea con el WiFi activo para recibir órdenes y publicar el latido, así que va enchufado. Como referencia, con un powerbank de 10 000 mAh la autonomía sería 10 000 × 0,8 ÷ 86,2 = unas 93 horas.
+
+Consumo de la app en el móvil: mantiene una conexión MQTT abierta mientras hay sesión, y sincroniza los eventos pendientes cuando vuelve la red.
+
+Decisiones para ahorrar energía: la app recibe por MQTT sin sondear y reintenta con espera creciente hasta 60 s. WorkManager solo corre con red. El ESP32 publica al cambiar un sensor más un latido cada 15 s y escribe en flash solo sin conexión.
+
+## 9. Compatibilidad
+
+| | |
+|---|---|
+| `minSdk` | 26 (Android 8.0), la versión que introdujo los canales de notificación que usa la app para las alertas |
+| `targetSdk` | 36 |
+| Arquitecturas / ABIs | arm64-v8a, armeabi-v7a, x86_64 |
+
+| Dispositivo | Android | Arquitectura | Resultado |
 |---|---|---|---|
-| ESP32-WROOM-32 con WiFi | 80 mA | 80 mA (picos de TX de 160 a 260 mA) | Datasheet de Espressif |
-| PIR HC-SR501 | 0,065 mA | 0,065 mA | Dato del proyecto (máximo en reposo) |
-| Reed con pull-up interno | < 0,1 mA | < 0,1 mA | Estimado |
-| LED de armado | 6 mA | 6 mA | (3,3 V − 2 V) / 220 ohm |
-| LED de estrobo | 0 | 6 mA | Mismo cálculo |
-| Sirena | 0 | 30 mA | Valor típico de un buzzer activo |
-| Total | 86,2 mA (0,43 W) | 122,2 mA (0,61 W) | |
+| Samsung Galaxy SM-S936B | 17 (One UI 9) | arm64-v8a | Funciona |
+| Waydroid (LineageOS) en PC | 13 | x86_64 | Funciona |
 
-Para ahorrar energía, la app recibe todo por MQTT sin sondear, reintenta con espera creciente y solo sincroniza con red. El nodo publica al cambiar un sensor más un latido cada 15 s, y escribe en flash solo sin conexión.
+## 10. Cómo compilar y ejecutar
 
-La comunicación nodo-app va por WiFi y MQTT. El puerto serie USB se usa para cargar el firmware y depurar.
+Firmware: Arduino IDE 2.x, placa "ESP32 Dev Module" (core esp32 de Espressif 3.3.x), librerías PubSubClient y ArduinoJson 7 (`hardware/esp32-bodega/libraries.txt`). Copiar `sketch/secrets.example.h` a `secrets.h` en la misma carpeta, completar `WIFI_SSID`, `WIFI_PASS`, `MQTT_HOST`, `MQTT_USER`, `MQTT_PASS` y `CANAL`, y cargar `sketch/sketch.ino`.
 
-Compatibilidad: Android 8.0 o superior (`minSdk` 26, `targetSdk` 36), ABIs `arm64-v8a`, `armeabi-v7a` y `x86_64`. Probada en un Samsung SM-S936B con Android 17 y en Waydroid (LineageOS x86_64).
+App: Android Studio o Gradle desde la terminal (`./gradlew assembleDebug`). Hacen falta `app/google-services.json` de Firebase y `local.properties` con `mqtt.host`, `mqtt.user`, `mqtt.password` y `mqtt.channel`. El APK está en la sección Releases del repositorio.
 
-## 9. Cómo compilar
+Orden de arranque para la demostración:
 
-### App
+1. Conectar el ESP32 por USB-C y esperar `Conectando a MQTT... OK` en el monitor serie.
+2. Abrir la app, elegir "ESP32 físico" en el login, escribir el canal e iniciar sesión.
+3. En la pantalla Red, comprobar Broker "Conectado" y ESP32 "En línea".
+4. Armar desde la app y activar el PIR o el botón de puerta.
 
-```bash
-ANDROID_HOME=~/Android/Sdk ./gradlew assembleDebug
-# APK en app/build/outputs/apk/debug/app-debug.apk
-```
-
-Faltan en git y hay que agregarlos: `app/google-services.json` (Firebase), `debug.keystore` en la raíz y `local.properties` con el SDK y el broker:
-
-```properties
-mqtt.host=<host del broker>
-mqtt.user=<usuario>
-mqtt.password=<clave>
-mqtt.channel=<canal>
-```
-
-### Firmware
-
-1. Arduino IDE 2.x con el core esp32 de Espressif 3.3.x.
-2. Librerías PubSubClient y ArduinoJson 7.
-3. Copiar `sketch/secrets.example.h` a `secrets.h` y completar `WIFI_SSID`, `WIFI_PASS`, `MQTT_HOST`, `MQTT_USER`, `MQTT_PASS` y `CANAL`.
-4. Abrir `sketch/sketch.ino`, elegir la placa ESP32 y el puerto, y cargar.
-
-`mqtt_monitor.py` lee `MQTT_HOST`, `MQTT_USER`, `MQTT_PASS` y `MQTT_CANAL` del entorno.
-
-## 10. Qué no funcionó
+## 11. Qué no funcionó y qué mejoraríamos
 
 - Sirena: no teníamos buzzer y el GPIO25 quedó sin conectar. El sketch genera los tonos y en Wokwi suenan. En el montaje el nodo recibe la orden y responde el ACK, pero no suena nada.
-- PIR KS6018 de un kit: la salida quedaba en HIGH o se activaba sola cada pocos segundos. Era falla del módulo; se cambió por un HC-SR501.
-- Bluetooth entre teléfonos: nunca fue fiable y se reemplazó por un enlace WiFi LAN (WebSocket 8765, NSD y AES-GCM).
+- PIR KS6018 de un kit: la salida quedaba en HIGH o se activaba sola cada pocos segundos. Era falla del módulo; se cambió por un HC-SR501. El firmware no detecta un sensor atascado.
 - Botón como reed: el rebote generaba eventos dobles. Se resolvió con un antirrebote de 80 ms.
-- Con Wokwi muy lento (por ejemplo al 3 %), el ESP32 tarda minutos en conectar al broker.
-- En modo ESP32 la app sigue mostrando las tarjetas de la red local, aunque no se usan.
+- Bluetooth entre teléfonos: nunca fue fiable y se reemplazó por un enlace WiFi en la red local.
+- Mejoraríamos: credenciales distintas por dispositivo, mensajes firmados y credenciales cifradas en la flash del ESP32.

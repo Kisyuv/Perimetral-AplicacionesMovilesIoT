@@ -21,3 +21,22 @@ app/google-services.json
 hardware/esp32-bodega/**/secrets.h
 __pycache__/
 build.log
+
+# Plantilla del curso (ES3)
+.idea/
+build/
+*.apk
+*.aab
+*.ap_
+*.dex
+*.jks
+*.keystore
+secrets.h
+secrets.properties
+google-services.json
+.pio/
+.vscode/
+*.elf
+*.bin
+*.hex
+Thumbs.db
